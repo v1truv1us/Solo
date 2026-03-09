@@ -2,980 +2,503 @@ package main
 
 import (
 	"encoding/json"
-	"flag"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 
-	"github.com/v1truv1us/solo/internal/cli"
-	solocontext "github.com/v1truv1us/solo/internal/context"
-	"github.com/v1truv1us/solo/internal/db"
-	"github.com/v1truv1us/solo/internal/git"
-	"github.com/v1truv1us/solo/internal/output"
+	"solo/internal/solo"
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		printUsage()
+	app := solo.NewApp()
+	if err := run(app, os.Args[1:]); err != nil {
+		var se *solo.Error
+		if errors.As(err, &se) {
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"error": se})
+			os.Exit(1)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"error": solo.NewInternalError(err)})
 		os.Exit(1)
 	}
+}
 
-	// Global flags
-	var jsonFlag bool
-	var dbFlag string
-	var verboseFlag bool
+func run(app *solo.App, args []string) error {
+	if len(args) == 0 {
+		return solo.ErrInvalidArgument("missing command")
+	}
+	jsonOut := hasFlag(args, "--json")
+	_ = jsonOut
 
-	// Find and strip global flags from args
-	args := os.Args[1:]
-	var cleanArgs []string
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--json":
-			jsonFlag = true
-		case "--db":
-			if i+1 < len(args) {
-				dbFlag = args[i+1]
+	switch args[0] {
+	case "init":
+		machineID := ""
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--machine-id" && i+1 < len(args) {
+				machineID = args[i+1]
 				i++
 			}
-		case "--verbose":
-			verboseFlag = true
-		default:
-			cleanArgs = append(cleanArgs, args[i])
 		}
-	}
-
-	if len(cleanArgs) == 0 {
-		printUsage()
-		os.Exit(1)
-	}
-
-	command := cleanArgs[0]
-	subArgs := cleanArgs[1:]
-
-	switch command {
-	case "init":
-		handleInit(subArgs, dbFlag, jsonFlag)
-	case "health":
-		handleHealth(dbFlag, jsonFlag, verboseFlag)
-	case "search":
-		handleSearch(subArgs, dbFlag, jsonFlag, verboseFlag)
-	case "task":
-		handleTask(subArgs, dbFlag, jsonFlag, verboseFlag)
-	case "session":
-		handleSession(subArgs, dbFlag, jsonFlag, verboseFlag)
-	case "handoff":
-		handleHandoff(subArgs, dbFlag, jsonFlag, verboseFlag)
-	case "worktree":
-		handleWorktree(subArgs, dbFlag, jsonFlag, verboseFlag)
-	case "recover":
-		handleRecover(subArgs, dbFlag, jsonFlag, verboseFlag)
-	case "reservation":
-		handleReservation(subArgs, dbFlag, jsonFlag, verboseFlag)
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", command)
-		printUsage()
-		os.Exit(1)
-	}
-}
-
-func printUsage() {
-	fmt.Fprintf(os.Stderr, `Usage: solo <command> [flags]
-
-Commands:
-  init          Initialize Solo in the current repository
-  health        Check system health
-  search        Full-text search across tasks
-  task          Task management (create, list, show, update, ready, deps, context, recover)
-  session       Session management (start, end, list)
-  handoff       Handoff management (create, list, show)
-  worktree      Worktree management (list, inspect, cleanup)
-  recover       Recovery operations (--all)
-  reservation   Reservation operations (renew)
-
-Global flags:
-  --json        Output structured JSON
-  --db <path>   Override database path
-  --verbose     Include diagnostic output
-`)
-}
-
-func handleInit(args []string, dbFlag string, jsonFlag bool) {
-	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	machineID := fs.String("machine-id", "", "Machine identifier")
-	fs.Parse(args)
-	cli.InitCmd(dbFlag, *machineID, jsonFlag)
-}
-
-func handleHealth(dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-	cli.HealthCmd(app)
-}
-
-func handleSearch(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	fs := flag.NewFlagSet("search", flag.ExitOnError)
-	status := fs.String("status", "", "Filter by status")
-	limit := fs.Int("limit", 10, "Max results")
-	fs.Parse(args)
-
-	query := strings.Join(fs.Args(), " ")
-	if query == "" {
-		outputError(output.NewError(output.ErrInvalidArgument, "search query is required", false, ""), jsonFlag)
-		return
-	}
-
-	results, total, err := db.SearchTasks(app.DB, query, *status, *limit)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(map[string]interface{}{
-		"results": results,
-		"total":   total,
-	})
-}
-
-func handleTask(args []string, dbFlag string, jsonFlag, verbose bool) {
-	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: solo task <create|list|show|update|ready|deps|context|recover>\n")
-		os.Exit(1)
-	}
-
-	subCmd := args[0]
-	subArgs := args[1:]
-
-	switch subCmd {
-	case "create":
-		handleTaskCreate(subArgs, dbFlag, jsonFlag, verbose)
-	case "list":
-		handleTaskList(subArgs, dbFlag, jsonFlag, verbose)
-	case "show":
-		handleTaskShow(subArgs, dbFlag, jsonFlag, verbose)
-	case "update":
-		handleTaskUpdate(subArgs, dbFlag, jsonFlag, verbose)
-	case "ready":
-		handleTaskReady(subArgs, dbFlag, jsonFlag, verbose)
-	case "deps":
-		handleTaskDeps(subArgs, dbFlag, jsonFlag, verbose)
-	case "context":
-		handleTaskContext(subArgs, dbFlag, jsonFlag, verbose)
-	case "recover":
-		handleTaskRecover(subArgs, dbFlag, jsonFlag, verbose)
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown task subcommand: %s\n", subCmd)
-		os.Exit(1)
-	}
-}
-
-func handleTaskCreate(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	fs := flag.NewFlagSet("task create", flag.ExitOnError)
-	title := fs.String("title", "", "Task title (required)")
-	desc := fs.String("description", "", "Description")
-	taskType := fs.String("type", "task", "Type: task, bug, feature, chore, spike")
-	priority := fs.Int("priority", 3, "Priority 1-5")
-	ac := fs.String("acceptance-criteria", "", "Acceptance criteria")
-	dod := fs.String("definition-of-done", "", "Definition of done")
-	parent := fs.String("parent", "", "Parent task ID")
-	labelsStr := fs.String("labels", "", "Comma-separated labels")
-	affectedStr := fs.String("affected-files", "", "Comma-separated affected files")
-	depsStr := fs.String("deps", "", "Comma-separated dependency task IDs")
-	fs.Parse(args)
-
-	if *title == "" {
-		outputError(output.NewError(output.ErrInvalidArgument, "--title is required", false, ""), jsonFlag)
-		return
-	}
-
-	var labels, affectedFiles, deps []string
-	if *labelsStr != "" {
-		labels = strings.Split(*labelsStr, ",")
-	}
-	if *affectedStr != "" {
-		affectedFiles = strings.Split(*affectedStr, ",")
-	}
-	if *depsStr != "" {
-		deps = strings.Split(*depsStr, ",")
-	}
-
-	var parentPtr *string
-	if *parent != "" {
-		parentPtr = parent
-	}
-
-	task, err := db.CreateTask(app.DB, db.CreateTaskParams{
-		Title:              *title,
-		Description:        *desc,
-		Type:               *taskType,
-		Priority:           *priority,
-		AcceptanceCriteria: *ac,
-		DefinitionOfDone:   *dod,
-		AffectedFiles:      affectedFiles,
-		Labels:             labels,
-		ParentTask:         parentPtr,
-		Dependencies:       deps,
-	})
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(map[string]interface{}{
-		"task": task,
-	})
-}
-
-func handleTaskList(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	fs := flag.NewFlagSet("task list", flag.ExitOnError)
-	status := fs.String("status", "", "Filter by status")
-	label := fs.String("label", "", "Filter by label")
-	available := fs.Bool("available", false, "Only available tasks")
-	limit := fs.Int("limit", 20, "Max results")
-	offset := fs.Int("offset", 0, "Pagination offset")
-	fs.Parse(args)
-
-	result, err := db.ListTasks(app.DB, db.ListTasksParams{
-		Status:    *status,
-		Label:     *label,
-		Available: *available,
-		Limit:     *limit,
-		Offset:    *offset,
-	})
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(result)
-}
-
-func handleTaskShow(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	if len(args) == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "task ID is required", false, ""), jsonFlag)
-		return
-	}
-
-	taskID := args[0]
-	task, err := db.GetTask(app.DB, taskID)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	// Get dependencies
-	deps, _ := db.GetTaskDependencies(app.DB, taskID)
-
-	// Get active reservation
-	res, _ := db.GetActiveReservation(app.DB, taskID)
-
-	// Get session count
-	var sessionCount int
-	app.DB.QueryRow("SELECT COUNT(*) FROM sessions WHERE task_id = ?", taskID).Scan(&sessionCount)
-
-	result := map[string]interface{}{
-		"task":         task,
-		"dependencies": deps,
-		"session_count": sessionCount,
-	}
-	if res != nil {
-		result["active_reservation"] = map[string]interface{}{
-			"id":         res.ID,
-			"worker_id":  res.WorkerID,
-			"expires_at": res.ExpiresAt,
-		}
-	} else {
-		result["active_reservation"] = nil
-	}
-
-	app.OutputSuccess(result)
-}
-
-func handleTaskUpdate(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	if len(args) == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "task ID is required", false, ""), jsonFlag)
-		return
-	}
-
-	taskID := args[0]
-	fs := flag.NewFlagSet("task update", flag.ExitOnError)
-	title := fs.String("title", "", "New title")
-	desc := fs.String("description", "", "New description")
-	taskType := fs.String("type", "", "New type")
-	status := fs.String("status", "", "New status")
-	priority := fs.String("priority", "", "New priority")
-	version := fs.Int("version", 0, "OCC version (required)")
-	labelsStr := fs.String("labels", "", "New labels (comma-separated)")
-	ac := fs.String("acceptance-criteria", "", "Acceptance criteria")
-	dod := fs.String("definition-of-done", "", "Definition of done")
-	fs.Parse(args[1:])
-
-	if *version == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "--version is required for updates", false, ""), jsonFlag)
-		return
-	}
-
-	params := db.UpdateTaskParams{
-		TaskID:  taskID,
-		Version: *version,
-	}
-
-	if *title != "" {
-		params.Title = title
-	}
-	if *desc != "" {
-		params.Description = desc
-	}
-	if *taskType != "" {
-		params.Type = taskType
-	}
-	if *status != "" {
-		params.Status = status
-	}
-	if *priority != "" {
-		p, err := strconv.Atoi(*priority)
+		resp, err := app.Init(machineID)
 		if err != nil {
-			outputError(output.NewError(output.ErrInvalidArgument, "priority must be a number", false, ""), jsonFlag)
-			return
+			return err
 		}
-		params.Priority = &p
-	}
-	if *labelsStr != "" {
-		labels := strings.Split(*labelsStr, ",")
-		params.Labels = &labels
-	}
-	if *ac != "" {
-		params.AcceptanceCriteria = ac
-	}
-	if *dod != "" {
-		params.DefinitionOfDone = dod
-	}
-
-	task, err := db.UpdateTask(app.DB, params)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(map[string]interface{}{"task": task})
-}
-
-func handleTaskReady(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	if len(args) == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "task ID is required", false, ""), jsonFlag)
-		return
-	}
-
-	taskID := args[0]
-	fs := flag.NewFlagSet("task ready", flag.ExitOnError)
-	version := fs.Int("version", 0, "OCC version (required)")
-	fs.Parse(args[1:])
-
-	if *version == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "--version is required", false, ""), jsonFlag)
-		return
-	}
-
-	task, err := db.ForceReady(app.DB, taskID, *version)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(map[string]interface{}{"task": task})
-}
-
-func handleTaskDeps(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	if len(args) == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "task ID is required", false, ""), jsonFlag)
-		return
-	}
-
-	taskID := args[0]
-	deps, err := db.GetTaskDependencies(app.DB, taskID)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	// Find blocking deps
-	var blocking []string
-	for _, d := range deps {
-		if d.Status != "done" {
-			blocking = append(blocking, d.ID)
+		return writeJSON(resp)
+	case "health":
+		resp, err := app.Health()
+		if err != nil {
+			return err
 		}
+		return writeJSON(resp)
+	case "search":
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing query")
+		}
+		query := args[1]
+		status := ""
+		limit := 10
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
+			case "--status":
+				if i+1 < len(args) {
+					status = args[i+1]
+					i++
+				}
+			case "--limit":
+				if i+1 < len(args) {
+					v, _ := strconv.Atoi(args[i+1])
+					if v > 0 {
+						limit = v
+					}
+					i++
+				}
+			}
+		}
+		resp, err := app.Search(query, status, limit)
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
+	case "task":
+		return runTask(app, args[1:])
+	case "session":
+		return runSession(app, args[1:])
+	case "reservation":
+		if len(args) > 1 && args[1] == "renew" {
+			if len(args) < 3 {
+				return solo.ErrInvalidArgument("missing task id")
+			}
+			resp, err := app.RenewReservation(args[2])
+			if err != nil {
+				return err
+			}
+			return writeJSON(resp)
+		}
+		return solo.ErrInvalidArgument("unknown reservation command")
+	case "handoff":
+		return runHandoff(app, args[1:])
+	case "worktree":
+		return runWorktree(app, args[1:])
+	case "recover":
+		if len(args) >= 2 && args[1] == "--all" {
+			resp, err := app.RecoverAll()
+			if err != nil {
+				return err
+			}
+			return writeJSON(resp)
+		}
+		return solo.ErrInvalidArgument("expected --all")
+	default:
+		return solo.ErrInvalidArgument("unknown command")
 	}
-	if blocking == nil {
-		blocking = []string{}
-	}
-
-	app.OutputSuccess(map[string]interface{}{
-		"task_id":      taskID,
-		"dependencies": deps,
-		"blocking":     blocking,
-	})
 }
 
-func handleTaskContext(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
+func runTask(app *solo.App, args []string) error {
 	if len(args) == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "task ID is required", false, ""), jsonFlag)
-		return
+		return solo.ErrInvalidArgument("missing task subcommand")
 	}
-
-	taskID := args[0]
-	fs := flag.NewFlagSet("task context", flag.ExitOnError)
-	maxTokens := fs.Int("max-tokens", 0, "Token budget")
-	fs.Parse(args[1:])
-
-	bundle, err := solocontext.AssembleBundle(app.DB, taskID, *maxTokens)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
+	switch args[0] {
+	case "create":
+		title := ""
+		typeVal := "task"
+		priority := 3
+		desc := ""
+		ac := ""
+		dod := ""
+		parent := ""
+		labels := []string{}
+		affected := []string{}
+		deps := []string{}
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--title":
+				title = val(args, &i)
+			case "--type":
+				typeVal = val(args, &i)
+			case "--priority":
+				v, _ := strconv.Atoi(val(args, &i))
+				if v >= 1 && v <= 5 {
+					priority = v
+				}
+			case "--description":
+				desc = val(args, &i)
+			case "--acceptance-criteria":
+				ac = val(args, &i)
+			case "--definition-of-done":
+				dod = val(args, &i)
+			case "--parent":
+				parent = val(args, &i)
+			case "--labels":
+				labels = splitCSV(val(args, &i))
+			case "--affected-files":
+				affected = splitCSV(val(args, &i))
+			case "--deps":
+				deps = splitCSV(val(args, &i))
+			}
+		}
+		resp, err := app.CreateTask(solo.CreateTaskInput{
+			Title: title, Type: typeVal, Priority: priority, Description: desc,
+			AcceptanceCriteria: ac, DefinitionOfDone: dod, ParentTask: parent,
+			Labels: labels, AffectedFiles: affected, Dependencies: deps,
+		})
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
+	case "list":
+		status := ""
+		label := ""
+		available := false
+		limit := 20
+		offset := 0
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--status":
+				status = val(args, &i)
+			case "--label":
+				label = val(args, &i)
+			case "--available":
+				available = true
+			case "--limit":
+				limit, _ = strconv.Atoi(val(args, &i))
+			case "--offset":
+				offset, _ = strconv.Atoi(val(args, &i))
+			}
+		}
+		resp, err := app.ListTasks(status, label, available, limit, offset)
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
+	case "show":
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing task id")
+		}
+		resp, err := app.ShowTask(args[1])
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
+	case "update":
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing task id")
+		}
+		taskID := args[1]
+		status := ""
+		version := 0
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
+			case "--status":
+				status = val(args, &i)
+			case "--version":
+				version, _ = strconv.Atoi(val(args, &i))
+			}
+		}
+		resp, err := app.UpdateTaskStatus(taskID, status, version)
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
+	case "ready":
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing task id")
+		}
+		version := 0
+		for i := 2; i < len(args); i++ {
+			if args[i] == "--version" {
+				version, _ = strconv.Atoi(val(args, &i))
+			}
+		}
+		resp, err := app.ForceReady(args[1], version)
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
+	case "deps":
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing task id")
+		}
+		resp, err := app.TaskDeps(args[1])
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
+	case "recover":
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing task id")
+		}
+		version := 0
+		for i := 2; i < len(args); i++ {
+			if args[i] == "--version" {
+				version, _ = strconv.Atoi(val(args, &i))
+			}
+		}
+		resp, err := app.RecoverTask(args[1], version)
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
+	default:
+		if args[0] == "context" {
+			if len(args) < 2 {
+				return solo.ErrInvalidArgument("missing task id")
+			}
+			maxTokens := 0
+			for i := 2; i < len(args); i++ {
+				if args[i] == "--max-tokens" {
+					maxTokens, _ = strconv.Atoi(val(args, &i))
+				}
+			}
+			resp, err := app.TaskContext(args[1], maxTokens)
+			if err != nil {
+				return err
+			}
+			return writeJSON(resp)
+		}
+		return solo.ErrInvalidArgument("unknown task subcommand")
 	}
-
-	app.OutputSuccess(bundle)
 }
 
-func handleTaskRecover(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
+func runSession(app *solo.App, args []string) error {
 	if len(args) == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "task ID is required", false, ""), jsonFlag)
-		return
+		return solo.ErrInvalidArgument("missing session subcommand")
 	}
-
-	taskID := args[0]
-	fs := flag.NewFlagSet("task recover", flag.ExitOnError)
-	version := fs.Int("version", 0, "OCC version (required)")
-	fs.Parse(args[1:])
-
-	if *version == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "--version is required", false, ""), jsonFlag)
-		return
-	}
-
-	result, err := db.RecoverTask(app.DB, taskID, *version, nil, nil)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(result)
-}
-
-func handleSession(args []string, dbFlag string, jsonFlag, verbose bool) {
-	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: solo session <start|end|list>\n")
-		os.Exit(1)
-	}
-
 	switch args[0] {
 	case "start":
-		handleSessionStart(args[1:], dbFlag, jsonFlag, verbose)
-	case "end":
-		handleSessionEnd(args[1:], dbFlag, jsonFlag, verbose)
-	case "list":
-		handleSessionList(args[1:], dbFlag, jsonFlag, verbose)
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown session subcommand: %s\n", args[0])
-		os.Exit(1)
-	}
-}
-
-func handleSessionStart(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	if len(args) == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "task ID is required", false, ""), jsonFlag)
-		return
-	}
-
-	taskID := args[0]
-	fs := flag.NewFlagSet("session start", flag.ExitOnError)
-	worker := fs.String("worker", "", "Worker identifier (required)")
-	ttl := fs.Int("ttl", 0, "Reservation TTL in seconds")
-	pid := fs.Int("pid", 0, "Agent PID (default: current process)")
-	fs.Parse(args[1:])
-
-	if *worker == "" {
-		outputError(output.NewError(output.ErrInvalidArgument, "--worker is required", false, ""), jsonFlag)
-		return
-	}
-
-	result, err := db.StartSession(app.DB, taskID, *worker, *pid, *ttl)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	// Create worktree (after DB transaction commits per spec §6.2)
-	wtPath, branch, wtErr := git.CreateWorktree(app.DB, app.RepoRoot, taskID, result.SessionID, result.ReservationID)
-	if wtErr != nil {
-		// Compensating transaction to undo session start
-		db.CompensateSessionStart(app.DB, result.SessionID, result.ReservationID, taskID, result.TaskVersion-1)
-		outputError(wtErr, jsonFlag)
-		return
-	}
-
-	result.WorktreePath = wtPath
-	result.Branch = branch
-
-	// Assemble context bundle
-	bundle, _ := solocontext.AssembleBundle(app.DB, taskID, 0)
-
-	resp := map[string]interface{}{
-		"session_id":     result.SessionID,
-		"reservation_id": result.ReservationID,
-		"worktree_path":  result.WorktreePath,
-		"branch":         result.Branch,
-		"expires_at":     result.ExpiresAt,
-	}
-	if bundle != nil {
-		resp["context"] = bundle
-	}
-
-	app.OutputSuccess(resp)
-}
-
-func handleSessionEnd(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	if len(args) == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "task ID is required", false, ""), jsonFlag)
-		return
-	}
-
-	taskID := args[0]
-	fs := flag.NewFlagSet("session end", flag.ExitOnError)
-	result := fs.String("result", "", "Result: completed, failed, interrupted, abandoned (required)")
-	notes := fs.String("notes", "", "Session notes")
-	summary := fs.String("summary", "", "Session summary (alias for notes)")
-	commits := fs.String("commits", "", "Comma-separated commit SHAs")
-	statusOverride := fs.String("status", "", "Override task status (e.g. 'done')")
-	fs.Parse(args[1:])
-
-	if *result == "" {
-		outputError(output.NewError(output.ErrInvalidArgument, "--result is required", false, ""), jsonFlag)
-		return
-	}
-
-	notesVal := *notes
-	if notesVal == "" {
-		notesVal = *summary
-	}
-
-	var commitsJSON string
-	if *commits != "" {
-		shas := strings.Split(*commits, ",")
-		var commitObjs []map[string]string
-		for _, sha := range shas {
-			commitObjs = append(commitObjs, map[string]string{"sha": strings.TrimSpace(sha)})
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing task id")
 		}
-		b, _ := json.Marshal(commitObjs)
-		commitsJSON = string(b)
+		taskID := args[1]
+		worker := ""
+		ttl := 0
+		pid := os.Getpid()
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
+			case "--worker":
+				worker = val(args, &i)
+			case "--ttl":
+				ttl, _ = strconv.Atoi(val(args, &i))
+			case "--pid":
+				pid, _ = strconv.Atoi(val(args, &i))
+			}
+		}
+		resp, err := app.StartSession(taskID, worker, ttl, pid)
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
+	case "end":
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing task id")
+		}
+		taskID := args[1]
+		result := ""
+		notes := ""
+		commits := []string{}
+		files := []string{}
+		status := ""
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
+			case "--result":
+				result = val(args, &i)
+			case "--notes":
+				notes = val(args, &i)
+			case "--commits":
+				commits = splitCSV(val(args, &i))
+			case "--files":
+				files = splitCSV(val(args, &i))
+			case "--status":
+				status = val(args, &i)
+			}
+		}
+		resp, err := app.EndSession(taskID, result, notes, commits, files, status)
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
+	case "list":
+		taskID := ""
+		worker := ""
+		active := false
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--task":
+				taskID = val(args, &i)
+			case "--worker":
+				worker = val(args, &i)
+			case "--active":
+				active = true
+			}
+		}
+		resp, err := app.ListSessions(taskID, worker, active)
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
+	default:
+		return solo.ErrInvalidArgument("unknown session subcommand")
 	}
-
-	endResult, err := db.EndSession(app.DB, db.EndSessionParams{
-		TaskID:         taskID,
-		Result:         *result,
-		Notes:          notesVal,
-		Commits:        commitsJSON,
-		StatusOverride: *statusOverride,
-	})
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(endResult)
 }
 
-func handleSessionList(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	fs := flag.NewFlagSet("session list", flag.ExitOnError)
-	taskID := fs.String("task", "", "Filter by task ID")
-	worker := fs.String("worker", "", "Filter by worker")
-	active := fs.Bool("active", false, "Only active sessions")
-	fs.Parse(args)
-
-	sessions, err := db.ListSessions(app.DB, *taskID, *worker, *active)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(map[string]interface{}{
-		"sessions": sessions,
-	})
-}
-
-func handleHandoff(args []string, dbFlag string, jsonFlag, verbose bool) {
+func runHandoff(app *solo.App, args []string) error {
 	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: solo handoff <create|list|show>\n")
-		os.Exit(1)
+		return solo.ErrInvalidArgument("missing handoff subcommand")
 	}
-
 	switch args[0] {
 	case "create":
-		handleHandoffCreate(args[1:], dbFlag, jsonFlag, verbose)
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing task id")
+		}
+		taskID := args[1]
+		summary := ""
+		remaining := ""
+		to := ""
+		files := []string{}
+		for i := 2; i < len(args); i++ {
+			switch args[i] {
+			case "--summary":
+				summary = val(args, &i)
+			case "--remaining-work":
+				remaining = val(args, &i)
+			case "--to":
+				to = val(args, &i)
+			case "--files":
+				files = splitCSV(val(args, &i))
+			}
+		}
+		resp, err := app.CreateHandoff(taskID, summary, remaining, to, files)
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
 	case "list":
-		handleHandoffList(args[1:], dbFlag, jsonFlag, verbose)
+		taskID := ""
+		status := ""
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--task":
+				taskID = val(args, &i)
+			case "--status":
+				status = val(args, &i)
+			}
+		}
+		resp, err := app.ListHandoffs(taskID, status)
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
 	case "show":
-		handleHandoffShow(args[1:], dbFlag, jsonFlag, verbose)
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing handoff id")
+		}
+		resp, err := app.ShowHandoff(args[1])
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
 	default:
-		fmt.Fprintf(os.Stderr, "Unknown handoff subcommand: %s\n", args[0])
-		os.Exit(1)
+		return solo.ErrInvalidArgument("unknown handoff subcommand")
 	}
 }
 
-func handleHandoffCreate(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
+func runWorktree(app *solo.App, args []string) error {
 	if len(args) == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "task ID is required", false, ""), jsonFlag)
-		return
+		return solo.ErrInvalidArgument("missing worktree subcommand")
 	}
-
-	taskID := args[0]
-	fs := flag.NewFlagSet("handoff create", flag.ExitOnError)
-	summary := fs.String("summary", "", "Summary (required)")
-	remainingWork := fs.String("remaining-work", "", "Remaining work")
-	toWorker := fs.String("to", "", "Recommended next worker")
-	filesStr := fs.String("files", "", "Comma-separated modified files")
-	fs.Parse(args[1:])
-
-	if *summary == "" {
-		outputError(output.NewError(output.ErrInvalidArgument, "--summary is required", false, ""), jsonFlag)
-		return
-	}
-
-	var files []string
-	if *filesStr != "" {
-		files = strings.Split(*filesStr, ",")
-	}
-
-	result, err := db.CreateHandoff(app.DB, db.CreateHandoffParams{
-		TaskID:        taskID,
-		Summary:       *summary,
-		RemainingWork: *remainingWork,
-		ToWorker:      *toWorker,
-		Files:         files,
-	})
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(result)
-}
-
-func handleHandoffList(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	fs := flag.NewFlagSet("handoff list", flag.ExitOnError)
-	taskID := fs.String("task", "", "Filter by task ID")
-	status := fs.String("status", "", "Filter by status")
-	fs.Parse(args)
-
-	handoffs, err := db.ListHandoffs(app.DB, *taskID, *status)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(map[string]interface{}{
-		"handoffs": handoffs,
-	})
-}
-
-func handleHandoffShow(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	if len(args) == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "handoff ID is required", false, ""), jsonFlag)
-		return
-	}
-
-	handoff, err := db.GetHandoff(app.DB, args[0])
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(handoff)
-}
-
-func handleWorktree(args []string, dbFlag string, jsonFlag, verbose bool) {
-	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: solo worktree <list|inspect|cleanup>\n")
-		os.Exit(1)
-	}
-
 	switch args[0] {
 	case "list":
-		handleWorktreeList(args[1:], dbFlag, jsonFlag, verbose)
+		resp, err := app.ListWorktrees()
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
 	case "inspect":
-		handleWorktreeInspect(args[1:], dbFlag, jsonFlag, verbose)
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing task id")
+		}
+		resp, err := app.InspectWorktree(args[1])
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
 	case "cleanup":
-		handleWorktreeCleanup(args[1:], dbFlag, jsonFlag, verbose)
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown worktree subcommand: %s\n", args[0])
-		os.Exit(1)
-	}
-}
-
-func handleWorktreeList(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	fs := flag.NewFlagSet("worktree list", flag.ExitOnError)
-	status := fs.String("status", "", "Filter by status")
-	fs.Parse(args)
-
-	worktrees, err := git.ListWorktrees(app.DB, *status)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	maxWT := 5
-	maxStr, _ := db.GetConfig(app.DB, "max_worktrees")
-	fmt.Sscanf(maxStr, "%d", &maxWT)
-
-	app.OutputSuccess(map[string]interface{}{
-		"worktrees": worktrees,
-		"total":     len(worktrees),
-		"max":       maxWT,
-	})
-}
-
-func handleWorktreeInspect(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	if len(args) == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "task ID or worktree ID is required", false, ""), jsonFlag)
-		return
-	}
-
-	wt, err := git.InspectWorktree(app.DB, app.RepoRoot, args[0])
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(wt)
-}
-
-func handleWorktreeCleanup(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	fs := flag.NewFlagSet("worktree cleanup", flag.ExitOnError)
-	force := fs.Bool("force", false, "Force cleanup of dirty worktrees")
-	fs.Parse(args)
-
-	taskID := ""
-	if len(fs.Args()) > 0 {
-		taskID = fs.Args()[0]
-	}
-
-	cleaned, skipped, err := git.CleanupWorktree(app.DB, app.RepoRoot, taskID, *force)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(map[string]interface{}{
-		"cleaned": cleaned,
-		"skipped": skipped,
-	})
-}
-
-func handleRecover(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	// solo recover --all
-	result, err := db.RecoverAll(app.DB)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(result)
-}
-
-func handleReservation(args []string, dbFlag string, jsonFlag, verbose bool) {
-	if len(args) == 0 {
-		fmt.Fprintf(os.Stderr, "Usage: solo reservation <renew>\n")
-		os.Exit(1)
-	}
-
-	switch args[0] {
-	case "renew":
-		handleReservationRenew(args[1:], dbFlag, jsonFlag, verbose)
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown reservation subcommand: %s\n", args[0])
-		os.Exit(1)
-	}
-}
-
-func handleReservationRenew(args []string, dbFlag string, jsonFlag, verbose bool) {
-	app, err := cli.NewApp(dbFlag, jsonFlag, verbose, false)
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-	defer app.Close()
-
-	if len(args) == 0 {
-		outputError(output.NewError(output.ErrInvalidArgument, "task ID is required", false, ""), jsonFlag)
-		return
-	}
-
-	res, err := db.RenewReservation(app.DB, args[0])
-	if err != nil {
-		outputError(err, jsonFlag)
-		return
-	}
-
-	app.OutputSuccess(map[string]interface{}{
-		"reservation": map[string]interface{}{
-			"id":              res.ID,
-			"task_id":         res.TaskID,
-			"new_expires_at":  res.ExpiresAt,
-			"remaining_sec":   res.TTLSec,
-		},
-	})
-}
-
-func outputError(err error, jsonFlag bool) {
-	if soloErr, ok := err.(*output.SoloError); ok {
-		if jsonFlag {
-			output.PrintError(soloErr)
-		} else {
-			fmt.Fprintf(os.Stderr, "Error [%s]: %s\n", soloErr.Code, soloErr.Message)
+		taskID := ""
+		force := false
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--force" {
+				force = true
+			} else if !strings.HasPrefix(args[i], "--") {
+				taskID = args[i]
+			}
 		}
-	} else {
-		se := &output.SoloError{Code: output.ErrDBError, Message: err.Error()}
-		if jsonFlag {
-			output.PrintError(se)
-		} else {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err.Error())
+		resp, err := app.CleanupWorktrees(taskID, force)
+		if err != nil {
+			return err
+		}
+		return writeJSON(resp)
+	default:
+		return solo.ErrInvalidArgument("unknown worktree subcommand")
+	}
+}
+
+func hasFlag(args []string, target string) bool {
+	for _, a := range args {
+		if a == target {
+			return true
 		}
 	}
-	os.Exit(1)
+	return false
+}
+
+func val(args []string, i *int) string {
+	if *i+1 >= len(args) {
+		return ""
+	}
+	*i = *i + 1
+	return args[*i]
+}
+
+func splitCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return []string{}
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func writeJSON(v any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(v); err != nil {
+		return fmt.Errorf("encode response: %w", err)
+	}
+	return nil
 }
