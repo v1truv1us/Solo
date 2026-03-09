@@ -108,3 +108,7 @@ func errHandoffLocked() *Error {
 func errWorktreeError(msg string) *Error {
 	return errWith("WORKTREE_ERROR", msg, false, "Inspect git output and retry")
 }
+
+func errBranchExists(branch string) *Error {
+	return errWith("BRANCH_EXISTS", "Branch already exists: "+branch, false, "Use --branch override")
+}

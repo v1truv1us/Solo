@@ -49,7 +49,7 @@ func createWorktree(repoRoot, path, branch, baseRef string) error {
 				return errWorktreeExists(path)
 			}
 			if strings.Contains(stderr, "already exists") && strings.Contains(stderr, "branch") {
-				return errWith("BRANCH_EXISTS", "Branch already exists: "+branch, false, "Use --branch override")
+				return errBranchExists(branch)
 			}
 		}
 		if strings.Contains(stderr, "not a commit") || strings.Contains(stderr, "unknown revision") {
@@ -127,4 +127,15 @@ func commitCountAheadBehind(repoRoot, path, baseRef string) (int, int) {
 	var behind, ahead int
 	_, _ = fmt.Sscanf(out, "%d\t%d", &behind, &ahead)
 	return ahead, behind
+}
+
+// getBaseCommitSHA resolves ref to its commit SHA. Returns errBaseRefNotFound when
+// git cannot resolve the ref (missing remote, typo, etc.) so the caller can surface
+// the error rather than silently persisting an empty or NULL base_commit_sha.
+func getBaseCommitSHA(repoRoot, ref string) (string, error) {
+	sha, _, err := gitRun(repoRoot, "rev-parse", ref)
+	if err != nil {
+		return "", errBaseRefNotFound(ref)
+	}
+	return sha, nil
 }

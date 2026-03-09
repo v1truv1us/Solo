@@ -40,6 +40,13 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 		var inProgressVersion int
 		var expiresAt string
 
+		// Resolve base commit SHA before the transaction so we can propagate
+		// git errors immediately rather than persisting a NULL or empty value.
+		baseCommitSHA, err := getBaseCommitSHA(repoRoot, baseRef)
+		if err != nil {
+			return nil, err
+		}
+
 		if err := withImmediateTx(ctx, db, func(conn *sql.Conn) error {
 			var activeSlots int
 			if err := conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM worktrees WHERE status IN ('active','cleanup_pending')`).Scan(&activeSlots); err != nil {
@@ -77,7 +84,7 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 				return err
 			}
 			if _, err := conn.ExecContext(ctx, `INSERT INTO worktrees (path, task_id, branch_name, base_ref, base_commit_sha, status)
-				VALUES (?, ?, ?, ?, NULL, 'cleanup_pending')`, worktreePath, taskID, branch, baseRef); err != nil {
+				VALUES (?, ?, ?, ?, ?, 'cleanup_pending')`, worktreePath, taskID, branch, baseRef, baseCommitSHA); err != nil {
 				if strings.Contains(strings.ToLower(err.Error()), "unique") {
 					return errWorktreeExists(worktreePath)
 				}
