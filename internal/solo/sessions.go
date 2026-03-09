@@ -76,8 +76,13 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 			if _, err := conn.ExecContext(ctx, `INSERT INTO sessions (id, task_id, reservation_id, worker_id, agent_pid) VALUES (?, ?, ?, ?, ?)`, sessionID, taskID, resID, worker, pid); err != nil {
 				return err
 			}
+			baseCommitSHA := getRefSHA(repoRoot, baseRef)
+			var baseCommitSHAVal any
+			if baseCommitSHA != "" {
+				baseCommitSHAVal = baseCommitSHA
+			}
 			if _, err := conn.ExecContext(ctx, `INSERT INTO worktrees (path, task_id, branch_name, base_ref, base_commit_sha, status)
-				VALUES (?, ?, ?, ?, NULL, 'cleanup_pending')`, worktreePath, taskID, branch, baseRef); err != nil {
+				VALUES (?, ?, ?, ?, ?, 'cleanup_pending')`, worktreePath, taskID, branch, baseRef, baseCommitSHAVal); err != nil {
 				if strings.Contains(strings.ToLower(err.Error()), "unique") {
 					return errWorktreeExists(worktreePath)
 				}

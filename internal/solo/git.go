@@ -31,6 +31,20 @@ func ensureRepoHasCommit(repoRoot string) error {
 	return nil
 }
 
+// getRefSHA resolves a git ref (branch, tag, or remote ref) to its full commit SHA.
+// Returns empty string if the ref cannot be resolved.
+func getRefSHA(repoRoot, ref string) string {
+	out, _, err := gitRun(repoRoot, "rev-parse", "--verify", ref)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+func errBranchExists(branch string) *Error {
+	return errWith("BRANCH_EXISTS", "Branch already exists: "+branch, false, "Use --branch override or delete the existing branch")
+}
+
 func createWorktree(repoRoot, path, branch, baseRef string) error {
 	for i := 0; i < 3; i++ {
 		_, stderr, err := gitRun(repoRoot, "worktree", "add", path, "-b", branch, baseRef)
@@ -45,11 +59,11 @@ func createWorktree(repoRoot, path, branch, baseRef string) error {
 			return errGitIndexLocked()
 		}
 		if strings.Contains(stderr, "already exists") {
-			if strings.Contains(stderr, "already exists") && strings.Contains(stderr, "worktree") {
+			if strings.Contains(stderr, "worktree") {
 				return errWorktreeExists(path)
 			}
-			if strings.Contains(stderr, "already exists") && strings.Contains(stderr, "branch") {
-				return errWith("BRANCH_EXISTS", "Branch already exists: "+branch, false, "Use --branch override")
+			if strings.Contains(stderr, "branch") {
+				return errBranchExists(branch)
 			}
 		}
 		if strings.Contains(stderr, "not a commit") || strings.Contains(stderr, "unknown revision") {
