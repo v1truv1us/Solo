@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -299,11 +298,6 @@ func (a *App) RenewReservation(taskID string) (map[string]any, error) {
 		remaining := defaultTTL
 		return map[string]any{"reservation": map[string]any{"id": rid, "task_id": taskID, "new_expires_at": expires, "remaining_sec": remaining}}, nil
 	})
-}
-
-func parseTaskIDNumber(taskID string) int {
-	v, _ := strconv.Atoi(strings.TrimPrefix(taskID, "T-"))
-	return v
 }
 
 func relOrSelf(repoRoot, path string) string {

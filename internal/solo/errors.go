@@ -69,10 +69,6 @@ func errRepoEmpty() *Error {
 	return errWith("REPO_EMPTY", "Repository has no commits.", false, "Make an initial commit before using worktrees")
 }
 
-func errWorktreeDirty(path string) *Error {
-	return errWith("WORKTREE_DIRTY", "Worktree has uncommitted changes: "+path, false, "Commit/stash, or use --force")
-}
-
 func errWorktreeExists(path string) *Error {
 	return errWith("WORKTREE_EXISTS", "Worktree path already exists: "+path, false, "Run solo worktree cleanup")
 }

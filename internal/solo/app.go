@@ -182,22 +182,6 @@ func configString(db *sql.DB, key, def string) string {
 	return s
 }
 
-func fetchTaskVersion(ctx context.Context, tx sqlRowQuerierContext, taskID string) (int, string, error) {
-	var version int
-	var status string
-	if err := tx.QueryRowContext(ctx, "SELECT version, status FROM tasks WHERE id=?", taskID).Scan(&version, &status); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return 0, "", errTaskNotFound(taskID)
-		}
-		return 0, "", err
-	}
-	return version, status, nil
-}
-
-type sqlRowQuerierContext interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 type sqlExecerContext interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }

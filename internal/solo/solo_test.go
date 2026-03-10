@@ -1,27 +1,11 @@
 package solo
 
 import (
-	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
-
-func testDB(t *testing.T) *sql.DB {
-	t.Helper()
-	db, err := openDB(":memory:")
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := applySchema(db); err != nil {
-		t.Fatalf("apply schema: %v", err)
-	}
-	if err := setDefaultConfig(db, "test-machine"); err != nil {
-		t.Fatalf("config: %v", err)
-	}
-	return db
-}
 
 func TestTransitionMatrixRejectsInvalid(t *testing.T) {
 	if transitionAllowed("open", "done") {
@@ -58,9 +42,9 @@ func TestInvalidTransitionErrorDetails(t *testing.T) {
 
 func TestTokenBudgetTruncatesLowPriorityFields(t *testing.T) {
 	bundle := map[string]any{
-		"meta": map[string]any{"token_budget": 10},
-		"system_directives": map[string]any{"trust_policy": "x", "worktree_rule": "y", "completion_rule": "z"},
-		"task": map[string]any{"id": "T-1", "title": "Title", "description": strings.Repeat("many words ", 100), "status": "ready", "type": "task", "priority": 3, "acceptance_criteria": "a", "definition_of_done": "b", "affected_files": []string{"a.go"}},
+		"meta":                 map[string]any{"token_budget": 10},
+		"system_directives":    map[string]any{"trust_policy": "x", "worktree_rule": "y", "completion_rule": "z"},
+		"task":                 map[string]any{"id": "T-1", "title": "Title", "description": strings.Repeat("many words ", 100), "status": "ready", "type": "task", "priority": 3, "acceptance_criteria": "a", "definition_of_done": "b", "affected_files": []string{"a.go"}},
 		"reservation":          map[string]any{"id": "r"},
 		"worktree":             map[string]any{"path": ".solo/worktrees/T-1"},
 		"dependencies":         []map[string]any{{"task_id": "T-0"}},
