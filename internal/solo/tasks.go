@@ -3,7 +3,6 @@ package solo
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"strings"
 )
 
@@ -351,7 +350,77 @@ func decodeCommitShas(shas []string) []map[string]string {
 	return out
 }
 
-func prettyJSON(v any) string {
-	b, _ := json.Marshal(v)
-	return string(b)
+func (a *App) UpdateTask(taskID, title, description, priority, parent string, labels, affectedFiles []string, expectedVersion int) (map[string]any, error) {
+	if expectedVersion <= 0 {
+		return nil, ErrInvalidArgument("--version is required")
+	}
+	return a.withDB(func(db *sql.DB) (map[string]any, error) {
+		ctx := context.Background()
+		var updated bool
+		if err := withImmediateTx(ctx, db, func(conn *sql.Conn) error {
+			var currentVersion int
+			if err := conn.QueryRowContext(ctx, `SELECT version FROM tasks WHERE id=?`, taskID).Scan(&currentVersion); err != nil {
+				if err == sql.ErrNoRows {
+					return errTaskNotFound(taskID)
+				}
+				return err
+			}
+			if locked, err := hasActiveReservation(ctx, conn, taskID); err != nil {
+				return err
+			} else if locked {
+				return errTaskLocked(taskID)
+			}
+			if currentVersion != expectedVersion {
+				return errVersionConflict()
+			}
+			updates := []string{"version = version + 1", "updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')"}
+			args := []any{}
+			if title != "" {
+				updates = append(updates, "title = ?")
+				args = append(args, title)
+			}
+			if description != "" {
+				updates = append(updates, "description = ?")
+				args = append(args, description)
+			}
+			if priority != "" {
+				updates = append(updates, "priority = ?")
+				args = append(args, priority)
+			}
+			if parent != "" {
+				updates = append(updates, "parent_task = ?")
+				args = append(args, parent)
+			}
+			if len(labels) > 0 {
+				updates = append(updates, "labels = ?")
+				args = append(args, mustJSON(labels))
+			}
+			if len(affectedFiles) > 0 {
+				updates = append(updates, "affected_files = ?")
+				args = append(args, mustJSON(affectedFiles))
+			}
+			args = append(args, taskID, expectedVersion)
+			query := `UPDATE tasks SET ` + strings.Join(updates, ", ") + ` WHERE id = ? AND version = ?`
+			res, err := conn.ExecContext(ctx, query, args...)
+			if err != nil {
+				return err
+			}
+			n, _ := res.RowsAffected()
+			if n == 0 {
+				return errVersionConflict()
+			}
+			updated = true
+			return writeAudit(ctx, conn, taskID, "task.update", "human", "cli", nil, map[string]any{"title": title, "description": description, "priority": priority})
+		}); err != nil {
+			return nil, err
+		}
+		if !updated {
+			return nil, errVersionConflict()
+		}
+		task, err := readTaskBasic(db, taskID)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"task": task}, nil
+	})
 }

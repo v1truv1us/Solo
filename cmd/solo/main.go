@@ -205,17 +205,32 @@ func runTask(app *solo.App, args []string) error {
 			return solo.ErrInvalidArgument("missing task id")
 		}
 		taskID := args[1]
-		status := ""
+		title := ""
+		description := ""
+		priority := ""
+		parent := ""
+		labels := []string{}
+		affected := []string{}
 		version := 0
 		for i := 2; i < len(args); i++ {
 			switch args[i] {
-			case "--status":
-				status = val(args, &i)
+			case "--title":
+				title = val(args, &i)
+			case "--description":
+				description = val(args, &i)
+			case "--priority":
+				priority = val(args, &i)
+			case "--parent":
+				parent = val(args, &i)
+			case "--labels":
+				labels = splitCSV(val(args, &i))
+			case "--affected-files":
+				affected = splitCSV(val(args, &i))
 			case "--version":
 				version, _ = strconv.Atoi(val(args, &i))
 			}
 		}
-		resp, err := app.UpdateTaskStatus(taskID, status, version)
+		resp, err := app.UpdateTask(taskID, title, description, priority, parent, labels, affected, version)
 		if err != nil {
 			return err
 		}
