@@ -59,13 +59,17 @@ Use Solo as a ledger, not an orchestrator.
 	solo init --json
 	solo task list --available --json
 
-2. Start session
+2. Plan task first (required)
+	solo task create --title "<planned task>" --priority high --json
+	solo task update <task-id> --status ready --version <n> --json
+
+3. Start session
 	solo session start <task-id> --worker <stable-agent-id> --json
 
-3. Update progress
+4. Update progress
 	solo task update <task-id> --status active --version <n> --json
 
-4. End or handoff
+5. End or handoff
 	solo session end <task-id> --summary "..." --json
 	# or
 	solo handoff create <task-id> --to <next-agent> --summary "..." --remaining-work "..." --json
