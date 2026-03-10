@@ -557,18 +557,27 @@ func runAudit(app *solo.App, args []string) error {
 }
 
 func parsePriority(raw string, fallback int) int {
-	v, err := strconv.Atoi(raw)
-	if err == nil && v >= 1 && v <= 5 {
-		return v
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if v, err := strconv.Atoi(raw); err == nil {
+		switch {
+		case v <= 2:
+			return 2
+		case v == 3:
+			return 3
+		case v == 4:
+			return 4
+		case v >= 5:
+			return 5
+		}
 	}
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "low":
+	switch raw {
+	case "low", "p3":
 		return 2
-	case "medium":
+	case "medium", "normal", "p2":
 		return 3
-	case "high":
+	case "high", "p1":
 		return 4
-	case "critical":
+	case "critical", "urgent", "p0":
 		return 5
 	default:
 		return fallback

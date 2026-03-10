@@ -8,11 +8,11 @@ import (
 )
 
 func TestTransitionMatrixRejectsInvalid(t *testing.T) {
-	if transitionAllowed("open", "done") {
-		t.Fatalf("open -> done must be invalid")
+	if transitionAllowed("draft", "completed") {
+		t.Fatalf("draft -> completed must be invalid")
 	}
-	if !transitionAllowed("open", "ready") {
-		t.Fatalf("open -> ready must be valid")
+	if !transitionAllowed("draft", "ready") {
+		t.Fatalf("draft -> ready must be valid")
 	}
 }
 
@@ -28,11 +28,11 @@ func TestSanitizeUntrusted(t *testing.T) {
 }
 
 func TestInvalidTransitionErrorDetails(t *testing.T) {
-	err := errInvalidTransition("open", "done", []string{"triaged", "ready", "cancelled"})
+	err := errInvalidTransition("draft", "completed", []string{"ready", "blocked", "cancelled"})
 	if err.Code != "INVALID_TRANSITION" {
 		t.Fatalf("unexpected code: %s", err.Code)
 	}
-	if err.CurrentStatus != "open" || err.RequestedStatus != "done" {
+	if err.CurrentStatus != "draft" || err.RequestedStatus != "completed" {
 		t.Fatalf("missing transition detail fields")
 	}
 	if len(err.ValidTransitions) != 3 {
@@ -58,6 +58,18 @@ func TestTokenBudgetTruncatesLowPriorityFields(t *testing.T) {
 	out := enforceTokenBudget(bundle, 20)
 	if dc, ok := out["duplicate_candidates"].([]map[string]any); ok && len(dc) > 0 {
 		t.Fatalf("expected duplicate candidates truncation")
+	}
+}
+
+func TestSemanticCompatibilityMappings(t *testing.T) {
+	if got := canonicalTaskStatus("in_progress"); got != "active" {
+		t.Fatalf("expected active, got %s", got)
+	}
+	if got := parsePriorityValue("1", 0); got != 2 {
+		t.Fatalf("expected low(2), got %d", got)
+	}
+	if got := priorityLabel(5); got != "critical" {
+		t.Fatalf("expected critical, got %s", got)
 	}
 }
 

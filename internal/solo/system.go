@@ -30,7 +30,7 @@ func (a *App) Health() (map[string]any, error) {
 			integrity = integ
 		}
 		counts := map[string]int{}
-		for _, s := range []string{"open", "triaged", "ready", "in_progress", "in_review", "blocked", "done", "cancelled"} {
+		for _, s := range []string{"draft", "ready", "active", "completed", "failed", "blocked", "cancelled"} {
 			var c int
 			_ = db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE status=?`, s).Scan(&c)
 			counts[s] = c
@@ -77,17 +77,17 @@ func (a *App) Health() (map[string]any, error) {
 			issues = append(issues, "db_integrity_failed")
 		}
 		return map[string]any{
-			"database": map[string]any{"path": ".solo/solo.db", "size_bytes": size, "integrity": integrity},
-			"schema_version":      schemaVersion,
-			"machine_id":          configString(db, "machine_id", "default"),
-			"tasks":               counts,
-			"active_reservations": activeReservations,
-			"active_sessions":     activeSessions,
-			"zombie_sessions":     zombieCount,
+			"database":             map[string]any{"path": ".solo/solo.db", "size_bytes": size, "integrity": integrity},
+			"schema_version":       schemaVersion,
+			"machine_id":           configString(db, "machine_id", "default"),
+			"tasks":                counts,
+			"active_reservations":  activeReservations,
+			"active_sessions":      activeSessions,
+			"zombie_sessions":      zombieCount,
 			"expired_reservations": expired,
-			"worktrees": map[string]any{"active": activeW, "cleanup_pending": cleanupPending, "max": maxW, "disk_usage_mb": diskUsage},
-			"pending_handoffs": pendingHandoffs,
-			"issues":           issues,
+			"worktrees":            map[string]any{"active": activeW, "cleanup_pending": cleanupPending, "max": maxW, "disk_usage_mb": diskUsage},
+			"pending_handoffs":     pendingHandoffs,
+			"issues":               issues,
 		}, nil
 	})
 }
@@ -122,7 +122,8 @@ func (a *App) RecoverTask(taskID string, expectedVersion int) (map[string]any, e
 				}
 				return err
 			}
-			if prevStatus != "in_progress" && prevStatus != "blocked" {
+			prevStatus = canonicalTaskStatus(prevStatus)
+			if prevStatus != "active" && prevStatus != "blocked" {
 				return errInvalidTransition(prevStatus, "ready", validTransitions[prevStatus])
 			}
 			var sessionID string
@@ -154,14 +155,14 @@ func (a *App) RecoverTask(taskID string, expectedVersion int) (map[string]any, e
 			return nil, err
 		}
 		return map[string]any{
-			"recovered":             true,
-			"task_id":               taskID,
-			"previous_status":       prevStatus,
-			"recovered_to":          "ready",
-			"session_ended":         endedSession,
-			"reservation_released":  releasedReservation,
-			"worktree_state":        worktreeState,
-			"recovery_record_id":    recID,
+			"recovered":            true,
+			"task_id":              taskID,
+			"previous_status":      prevStatus,
+			"recovered_to":         "ready",
+			"session_ended":        endedSession,
+			"reservation_released": releasedReservation,
+			"worktree_state":       worktreeState,
+			"recovery_record_id":   recID,
 		}, nil
 	})
 }
@@ -237,7 +238,8 @@ func (a *App) buildContextBundle(db *sql.DB, taskID string, maxTokens int) (map[
 		for rows.Next() {
 			var id, title, status string
 			_ = rows.Scan(&id, &title, &status)
-			deps = append(deps, map[string]any{"task_id": id, "title": sanitizeUntrusted(title), "status": status})
+			status = canonicalTaskStatus(status)
+			deps = append(deps, map[string]any{"task_id": id, "title": sanitizeUntrusted(title), "status": status, "status_legacy": legacyTaskStatus(status)})
 		}
 	}
 
@@ -296,7 +298,8 @@ func (a *App) buildContextBundle(db *sql.DB, taskID string, maxTokens int) (map[
 			var id, title, st string
 			var rank float64
 			_ = dRows.Scan(&id, &title, &st, &rank)
-			dupes = append(dupes, map[string]any{"task_id": id, "title": sanitizeUntrusted(title), "status": st, "fts5_rank": rank})
+			st = canonicalTaskStatus(st)
+			dupes = append(dupes, map[string]any{"task_id": id, "title": sanitizeUntrusted(title), "status": st, "status_legacy": legacyTaskStatus(st), "fts5_rank": rank})
 		}
 	}
 
@@ -316,7 +319,7 @@ func (a *App) buildContextBundle(db *sql.DB, taskID string, maxTokens int) (map[
 		"error_history":        []any{},
 		"duplicate_candidates": dupes,
 		"warnings":             []any{},
-		"truncation": map[string]any{"description_truncated": false, "sessions_total": len(recentSessions), "sessions_included": len(recentSessions), "handoffs_total": btoi(latestHandoff != nil), "handoffs_included": btoi(latestHandoff != nil)},
+		"truncation":           map[string]any{"description_truncated": false, "sessions_total": len(recentSessions), "sessions_included": len(recentSessions), "handoffs_total": btoi(latestHandoff != nil), "handoffs_included": btoi(latestHandoff != nil)},
 	}
 	bundle = enforceTokenBudget(bundle, maxTokens)
 	b, _ := jsonMarshal(bundle)

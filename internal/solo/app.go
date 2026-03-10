@@ -54,7 +54,7 @@ func (a *App) Init(machineID string) (map[string]any, error) {
 		"initialized":    true,
 		"database":       dbPath,
 		"machine_id":     machineID,
-		"schema_version": 1,
+		"schema_version": 2,
 	}, nil
 }
 
@@ -216,9 +216,10 @@ func readTaskBasic(db *sql.DB, taskID string) (map[string]any, error) {
 	if parent.Valid {
 		parentVal = parent.String
 	}
+	status = canonicalTaskStatus(status)
 	return map[string]any{
-		"id": id, "title": title, "description": description, "type": typ, "status": status,
-		"priority": priority, "acceptance_criteria": ac, "definition_of_done": dod,
+		"id": id, "title": title, "description": description, "type": typ, "status": status, "status_legacy": legacyTaskStatus(status),
+		"priority": priorityLabel(priority), "priority_value": priority, "acceptance_criteria": ac, "definition_of_done": dod,
 		"affected_files": affected, "labels": labels, "parent_task": parentVal,
 		"version": version, "created_at": created, "updated_at": updated,
 	}, nil

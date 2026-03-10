@@ -13,8 +13,8 @@ func applySchema(db *sql.DB) error {
 			title TEXT NOT NULL CHECK (length(trim(title)) > 0),
 			description TEXT DEFAULT '',
 			type TEXT NOT NULL DEFAULT 'task' CHECK (type IN ('task', 'bug', 'feature', 'chore', 'spike')),
-			status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'triaged', 'ready', 'in_progress', 'in_review', 'blocked', 'done', 'cancelled')),
-			priority INTEGER NOT NULL DEFAULT 3 CHECK (priority BETWEEN 1 AND 5),
+			status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'ready', 'active', 'completed', 'failed', 'blocked', 'cancelled')),
+			priority INTEGER NOT NULL DEFAULT 3 CHECK (priority BETWEEN 2 AND 5),
 			acceptance_criteria TEXT DEFAULT '',
 			definition_of_done TEXT DEFAULT '',
 			affected_files TEXT DEFAULT '[]',
@@ -163,20 +163,25 @@ func applySchema(db *sql.DB) error {
 			}
 		}
 		_, _ = conn.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version (version, description) VALUES (1, 'Solo v13 initial schema')`)
+		_, _ = conn.ExecContext(ctx, `UPDATE tasks SET status='draft' WHERE status IN ('open','triaged')`)
+		_, _ = conn.ExecContext(ctx, `UPDATE tasks SET status='active' WHERE status IN ('in_progress','in_review')`)
+		_, _ = conn.ExecContext(ctx, `UPDATE tasks SET status='completed' WHERE status='done'`)
+		_, _ = conn.ExecContext(ctx, `UPDATE tasks SET priority=2 WHERE priority < 2`)
+		_, _ = conn.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version (version, description) VALUES (2, 'Canonical task lifecycle + priority semantics')`)
 		return nil
 	})
 }
 
 func setDefaultConfig(db *sql.DB, machineID string) error {
 	defaults := map[string]string{
-		"machine_id":       machineID,
-		"default_ttl_sec":  "3600",
-		"max_ttl_sec":      "86400",
-		"max_worktrees":    "5",
-		"base_ref":         "origin/main",
-		"worktree_dir":     ".solo/worktrees",
-		"session_ttl_sec":  "14400",
-		"max_tokens":       "8000",
+		"machine_id":      machineID,
+		"default_ttl_sec": "3600",
+		"max_ttl_sec":     "86400",
+		"max_worktrees":   "5",
+		"base_ref":        "origin/main",
+		"worktree_dir":    ".solo/worktrees",
+		"session_ttl_sec": "14400",
+		"max_tokens":      "8000",
 	}
 	ctx := context.Background()
 	return withImmediateTx(ctx, db, func(conn *sql.Conn) error {

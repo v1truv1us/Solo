@@ -67,7 +67,7 @@ func (a *App) CreateHandoff(taskID, summary, remaining, to string, files []strin
 			if n == 0 {
 				return errVersionConflict()
 			}
-			return writeAudit(ctx, conn, taskID, "handoff.created", "agent", worker, map[string]any{"status": "in_progress"}, map[string]any{"status": "ready", "handoff_id": handoffID})
+			return writeAudit(ctx, conn, taskID, "handoff.created", "agent", worker, map[string]any{"status": "active"}, map[string]any{"status": "ready", "handoff_id": handoffID})
 		}); err != nil {
 			return nil, err
 		}

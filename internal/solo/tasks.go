@@ -7,14 +7,13 @@ import (
 )
 
 var validTransitions = map[string][]string{
-	"open":        {"triaged", "ready", "cancelled"},
-	"triaged":     {"ready", "blocked", "cancelled"},
-	"ready":       {"in_progress", "blocked", "cancelled"},
-	"in_progress": {"in_review", "blocked", "ready", "cancelled"},
-	"in_review":   {"done", "in_progress", "blocked", "cancelled"},
-	"blocked":     {"ready", "triaged", "cancelled"},
-	"done":        {},
-	"cancelled":   {"open"},
+	"draft":     {"ready", "blocked", "cancelled"},
+	"ready":     {"active", "blocked", "cancelled", "draft"},
+	"active":    {"completed", "failed", "blocked", "ready", "cancelled"},
+	"failed":    {"ready", "active", "cancelled"},
+	"blocked":   {"ready", "draft", "cancelled"},
+	"completed": {},
+	"cancelled": {"draft"},
 }
 
 type CreateTaskInput struct {
@@ -37,7 +36,7 @@ func (a *App) CreateTask(in CreateTaskInput) (map[string]any, error) {
 	if in.Type == "" {
 		in.Type = "task"
 	}
-	if in.Priority < 1 || in.Priority > 5 {
+	if in.Priority < 2 || in.Priority > 5 {
 		in.Priority = 3
 	}
 	return a.withDB(func(db *sql.DB) (map[string]any, error) {
@@ -67,7 +66,7 @@ func (a *App) CreateTask(in CreateTaskInput) (map[string]any, error) {
 					return err
 				}
 			}
-			return writeAudit(ctx, conn, taskID, "task.created", "human", "cli", nil, map[string]any{"id": taskID, "status": "open"})
+			return writeAudit(ctx, conn, taskID, "task.created", "human", "cli", nil, map[string]any{"id": taskID, "status": "draft"})
 		}); err != nil {
 			return nil, err
 		}
@@ -77,9 +76,10 @@ func (a *App) CreateTask(in CreateTaskInput) (map[string]any, error) {
 		if err := row.Scan(&id, &title, &typ, &status, &priority, &version, &created); err != nil {
 			return nil, err
 		}
+		status = canonicalTaskStatus(status)
 		return map[string]any{"task": map[string]any{
-			"id": id, "title": title, "type": typ, "status": status,
-			"priority": priority, "version": version, "created_at": created,
+			"id": id, "title": title, "type": typ, "status": status, "status_legacy": legacyTaskStatus(status),
+			"priority": priorityLabel(priority), "priority_value": priority, "version": version, "created_at": created,
 		}}, nil
 	})
 }
@@ -103,6 +103,13 @@ func ensureNoCycle(ctx context.Context, conn *sql.Conn, taskID, dep string) erro
 }
 
 func (a *App) ListTasks(status, label string, available bool, limit, offset int) (map[string]any, error) {
+	if status != "" {
+		var ok bool
+		status, ok = normalizeTaskStatus(status)
+		if !ok {
+			return nil, ErrInvalidArgument("--status must be one of draft|ready|active|completed|failed|blocked|cancelled")
+		}
+	}
 	if limit <= 0 {
 		limit = 20
 	}
@@ -142,9 +149,10 @@ func (a *App) ListTasks(status, label string, available bool, limit, offset int)
 			if err != nil {
 				return nil, err
 			}
+			st = canonicalTaskStatus(st)
 			tasks = append(tasks, map[string]any{
-				"id": id, "title": title, "type": typ, "status": st,
-				"priority": p, "labels": labels, "version": v, "updated_at": updated,
+				"id": id, "title": title, "type": typ, "status": st, "status_legacy": legacyTaskStatus(st),
+				"priority": priorityLabel(p), "priority_value": p, "labels": labels, "version": v, "updated_at": updated,
 			})
 		}
 		countQ := `SELECT COUNT(*) FROM tasks t WHERE 1=1`
@@ -185,7 +193,8 @@ func (a *App) ShowTask(taskID string) (map[string]any, error) {
 				rows.Close()
 				return nil, err
 			}
-			deps = append(deps, map[string]any{"task_id": id, "title": title, "status": status})
+			status = canonicalTaskStatus(status)
+			deps = append(deps, map[string]any{"task_id": id, "title": title, "status": status, "status_legacy": legacyTaskStatus(status)})
 		}
 		rows.Close()
 		var rid, worker, expires string
@@ -204,6 +213,11 @@ func (a *App) ShowTask(taskID string) (map[string]any, error) {
 func (a *App) UpdateTaskStatus(taskID, newStatus string, expectedVersion int) (map[string]any, error) {
 	if newStatus == "" {
 		return nil, ErrInvalidArgument("--status is required")
+	}
+	var ok bool
+	newStatus, ok = normalizeTaskStatus(newStatus)
+	if !ok {
+		return nil, ErrInvalidArgument("--status must be one of draft|ready|active|completed|failed|blocked|cancelled")
 	}
 	if expectedVersion <= 0 {
 		return nil, ErrInvalidArgument("--version is required")
@@ -228,6 +242,7 @@ func (a *App) UpdateTaskStatus(taskID, newStatus string, expectedVersion int) (m
 			if version != expectedVersion {
 				return errVersionConflict()
 			}
+			current = canonicalTaskStatus(current)
 			if !transitionAllowed(current, newStatus) {
 				return errInvalidTransition(current, newStatus, validTransitions[current])
 			}
@@ -299,7 +314,8 @@ func (a *App) TaskDeps(taskID string) (map[string]any, error) {
 			if err := rows.Scan(&id, &title, &status, &depth); err != nil {
 				return nil, err
 			}
-			deps = append(deps, map[string]any{"task_id": id, "title": title, "status": status, "depth": depth})
+			status = canonicalTaskStatus(status)
+			deps = append(deps, map[string]any{"task_id": id, "title": title, "status": status, "status_legacy": legacyTaskStatus(status), "depth": depth})
 		}
 		return map[string]any{"task_id": taskID, "dependencies": deps}, nil
 	})
@@ -316,6 +332,11 @@ func (a *App) Search(query, status string, limit int) (map[string]any, error) {
 		WHERE tasks_fts MATCH ?`
 		args := []any{query}
 		if status != "" {
+			var ok bool
+			status, ok = normalizeTaskStatus(status)
+			if !ok {
+				return nil, ErrInvalidArgument("--status must be one of draft|ready|active|completed|failed|blocked|cancelled")
+			}
 			sqlQ += ` AND t.status=?`
 			args = append(args, status)
 		}
@@ -333,7 +354,8 @@ func (a *App) Search(query, status string, limit int) (map[string]any, error) {
 			if err := rows.Scan(&id, &title, &st, &rank, &snippet); err != nil {
 				return nil, err
 			}
-			results = append(results, map[string]any{"task_id": id, "title": title, "status": st, "fts5_rank": rank, "snippet": snippet})
+			st = canonicalTaskStatus(st)
+			results = append(results, map[string]any{"task_id": id, "title": title, "status": st, "status_legacy": legacyTaskStatus(st), "fts5_rank": rank, "snippet": snippet})
 		}
 		return map[string]any{"results": results, "total": len(results)}, nil
 	})
@@ -376,7 +398,8 @@ func (a *App) TaskTree(taskID string) (map[string]any, error) {
 			if parent.Valid {
 				parentVal = parent.String
 			}
-			nodes = append(nodes, map[string]any{"id": id, "parent_task": parentVal, "title": title, "status": status, "priority": priority, "depth": depth})
+			status = canonicalTaskStatus(status)
+			nodes = append(nodes, map[string]any{"id": id, "parent_task": parentVal, "title": title, "status": status, "status_legacy": legacyTaskStatus(status), "priority": priorityLabel(priority), "priority_value": priority, "depth": depth})
 		}
 		if len(nodes) == 0 {
 			return nil, errTaskNotFound(taskID)
@@ -419,8 +442,12 @@ func (a *App) UpdateTask(taskID, title, description, priority, parent string, la
 				args = append(args, description)
 			}
 			if priority != "" {
+				pv := parsePriorityValue(priority, 0)
+				if pv == 0 {
+					return ErrInvalidArgument("--priority must be one of low|medium|high|critical (or 1-5)")
+				}
 				updates = append(updates, "priority = ?")
-				args = append(args, priority)
+				args = append(args, pv)
 			}
 			if parent != "" {
 				updates = append(updates, "parent_task = ?")

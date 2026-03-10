@@ -87,7 +87,7 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 				}
 				return err
 			}
-			res, err := conn.ExecContext(ctx, `UPDATE tasks SET status='in_progress', version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=?`, taskID, taskVersion)
+			res, err := conn.ExecContext(ctx, `UPDATE tasks SET status='active', version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=?`, taskID, taskVersion)
 			if err != nil {
 				return err
 			}
@@ -96,7 +96,7 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 				return errVersionConflict()
 			}
 			inProgressVersion = taskVersion + 1
-			return writeAudit(ctx, conn, taskID, "session.start", "agent", worker, map[string]any{"status": "ready"}, map[string]any{"status": "in_progress", "session_id": sessionID})
+			return writeAudit(ctx, conn, taskID, "session.start", "agent", worker, map[string]any{"status": "ready"}, map[string]any{"status": "active", "session_id": sessionID})
 		}); err != nil {
 			return nil, err
 		}
@@ -150,7 +150,7 @@ func (a *App) compensateStartFailure(db *sql.DB, taskID, sessionID, reservationI
 		_, _ = conn.ExecContext(ctx, `DELETE FROM sessions WHERE id=?`, sessionID)
 		_, _ = conn.ExecContext(ctx, `DELETE FROM reservations WHERE id=?`, reservationID)
 		_, _ = conn.ExecContext(ctx, `DELETE FROM worktrees WHERE path=? AND status='cleanup_pending'`, worktreePath)
-		_, _ = conn.ExecContext(ctx, `UPDATE tasks SET status='ready', version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=? AND status='in_progress'`, taskID, expectedVersion)
+		_, _ = conn.ExecContext(ctx, `UPDATE tasks SET status='ready', version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=? AND status='active'`, taskID, expectedVersion)
 		return nil
 	})
 }
@@ -167,7 +167,7 @@ func (a *App) EndSession(taskID, result, notes string, commits, files []string, 
 		var sessionID string
 		var reservationID string
 		var currentVersion int
-		taskStatus := "in_progress"
+		taskStatus := "active"
 		endedAt := ""
 		if err := withImmediateTx(ctx, db, func(conn *sql.Conn) error {
 			if err := conn.QueryRowContext(ctx, `SELECT s.id, s.reservation_id, t.version FROM sessions s JOIN tasks t ON t.id=s.task_id WHERE s.task_id=? AND s.ended_at IS NULL`, taskID).Scan(&sessionID, &reservationID, &currentVersion); err != nil {
@@ -191,19 +191,21 @@ func (a *App) EndSession(taskID, result, notes string, commits, files []string, 
 			if _, err := conn.ExecContext(ctx, `UPDATE reservations SET active=0, released_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), release_reason=? WHERE id=? AND active=1`, reason, reservationID); err != nil {
 				return err
 			}
-			target := "in_progress"
+			target := "active"
 			switch result {
 			case "completed":
-				target = "in_review"
-				if overrideStatus == "done" {
-					target = "done"
+				target = "completed"
+				if overrideStatus != "" {
+					if normalized, ok := normalizeTaskStatus(overrideStatus); ok {
+						target = normalized
+					}
 				}
 			case "interrupted", "abandoned":
 				target = "ready"
 			case "failed":
-				target = "in_progress"
+				target = "failed"
 			}
-			if target != "in_progress" {
+			if target != "active" {
 				res, err = conn.ExecContext(ctx, `UPDATE tasks SET status=?, version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=?`, target, taskID, currentVersion)
 				if err != nil {
 					return err
@@ -217,7 +219,7 @@ func (a *App) EndSession(taskID, result, notes string, commits, files []string, 
 			if err := conn.QueryRowContext(ctx, `SELECT ended_at FROM sessions WHERE id=?`, sessionID).Scan(&endedAt); err != nil {
 				return err
 			}
-			return writeAudit(ctx, conn, taskID, "session.end", "agent", "cli", map[string]any{"status": "in_progress"}, map[string]any{"status": taskStatus, "result": result})
+			return writeAudit(ctx, conn, taskID, "session.end", "agent", "cli", map[string]any{"status": "active"}, map[string]any{"status": taskStatus, "result": result})
 		}); err != nil {
 			return nil, err
 		}
