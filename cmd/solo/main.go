@@ -16,10 +16,10 @@ func main() {
 	if err := run(app, os.Args[1:]); err != nil {
 		var se *solo.Error
 		if errors.As(err, &se) {
-			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"error": se})
+			_ = writeJSON(map[string]any{"ok": false, "error": se})
 			os.Exit(1)
 		}
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"error": solo.NewInternalError(err)})
+		_ = writeJSON(map[string]any{"ok": false, "error": solo.NewInternalError(err)})
 		os.Exit(1)
 	}
 }
@@ -44,13 +44,13 @@ func run(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "health":
 		resp, err := app.Health()
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "search":
 		if len(args) < 2 {
 			return solo.ErrInvalidArgument("missing query")
@@ -79,7 +79,7 @@ func run(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "task":
 		return runTask(app, args[1:])
 	case "session":
@@ -93,20 +93,22 @@ func run(app *solo.App, args []string) error {
 			if err != nil {
 				return err
 			}
-			return writeJSON(resp)
+			return writeOK(resp)
 		}
 		return solo.ErrInvalidArgument("unknown reservation command")
 	case "handoff":
 		return runHandoff(app, args[1:])
 	case "worktree":
 		return runWorktree(app, args[1:])
+	case "audit":
+		return runAudit(app, args[1:])
 	case "recover":
 		if len(args) >= 2 && args[1] == "--all" {
 			resp, err := app.RecoverAll()
 			if err != nil {
 				return err
 			}
-			return writeJSON(resp)
+			return writeOK(resp)
 		}
 		return solo.ErrInvalidArgument("expected --all")
 	default:
@@ -137,10 +139,7 @@ func runTask(app *solo.App, args []string) error {
 			case "--type":
 				typeVal = val(args, &i)
 			case "--priority":
-				v, _ := strconv.Atoi(val(args, &i))
-				if v >= 1 && v <= 5 {
-					priority = v
-				}
+				priority = parsePriority(val(args, &i), 3)
 			case "--description":
 				desc = val(args, &i)
 			case "--acceptance-criteria":
@@ -165,7 +164,7 @@ func runTask(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "list":
 		status := ""
 		label := ""
@@ -190,7 +189,7 @@ func runTask(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "show":
 		if len(args) < 2 {
 			return solo.ErrInvalidArgument("missing task id")
@@ -199,7 +198,7 @@ func runTask(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "update":
 		if len(args) < 2 {
 			return solo.ErrInvalidArgument("missing task id")
@@ -219,7 +218,7 @@ func runTask(app *solo.App, args []string) error {
 			case "--description":
 				description = val(args, &i)
 			case "--priority":
-				priority = val(args, &i)
+				priority = strconv.Itoa(parsePriority(val(args, &i), 0))
 			case "--parent":
 				parent = val(args, &i)
 			case "--labels":
@@ -234,7 +233,7 @@ func runTask(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "ready":
 		if len(args) < 2 {
 			return solo.ErrInvalidArgument("missing task id")
@@ -249,7 +248,7 @@ func runTask(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "deps":
 		if len(args) < 2 {
 			return solo.ErrInvalidArgument("missing task id")
@@ -258,7 +257,16 @@ func runTask(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
+	case "tree":
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing task id")
+		}
+		resp, err := app.TaskTree(args[1])
+		if err != nil {
+			return err
+		}
+		return writeOK(resp)
 	case "recover":
 		if len(args) < 2 {
 			return solo.ErrInvalidArgument("missing task id")
@@ -273,7 +281,7 @@ func runTask(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	default:
 		if args[0] == "context" {
 			if len(args) < 2 {
@@ -289,7 +297,7 @@ func runTask(app *solo.App, args []string) error {
 			if err != nil {
 				return err
 			}
-			return writeJSON(resp)
+			return writeOK(resp)
 		}
 		return solo.ErrInvalidArgument("unknown task subcommand")
 	}
@@ -322,7 +330,7 @@ func runSession(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "end":
 		if len(args) < 2 {
 			return solo.ErrInvalidArgument("missing task id")
@@ -351,7 +359,7 @@ func runSession(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "list":
 		taskID := ""
 		worker := ""
@@ -370,7 +378,7 @@ func runSession(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	default:
 		return solo.ErrInvalidArgument("unknown session subcommand")
 	}
@@ -406,7 +414,7 @@ func runHandoff(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "list":
 		taskID := ""
 		status := ""
@@ -422,7 +430,7 @@ func runHandoff(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "show":
 		if len(args) < 2 {
 			return solo.ErrInvalidArgument("missing handoff id")
@@ -431,7 +439,7 @@ func runHandoff(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	default:
 		return solo.ErrInvalidArgument("unknown handoff subcommand")
 	}
@@ -447,7 +455,7 @@ func runWorktree(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "inspect":
 		if len(args) < 2 {
 			return solo.ErrInvalidArgument("missing task id")
@@ -456,7 +464,7 @@ func runWorktree(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	case "cleanup":
 		taskID := ""
 		force := false
@@ -471,7 +479,7 @@ func runWorktree(app *solo.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		return writeJSON(resp)
+		return writeOK(resp)
 	default:
 		return solo.ErrInvalidArgument("unknown worktree subcommand")
 	}
@@ -507,6 +515,68 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func runAudit(app *solo.App, args []string) error {
+	if len(args) == 0 {
+		return solo.ErrInvalidArgument("missing audit subcommand")
+	}
+	switch args[0] {
+	case "list":
+		taskID := ""
+		limit := 50
+		offset := 0
+		for i := 1; i < len(args); i++ {
+			switch args[i] {
+			case "--task":
+				taskID = val(args, &i)
+			case "--limit":
+				limit, _ = strconv.Atoi(val(args, &i))
+			case "--offset":
+				offset, _ = strconv.Atoi(val(args, &i))
+			}
+		}
+		resp, err := app.ListAudit(taskID, limit, offset)
+		if err != nil {
+			return err
+		}
+		return writeOK(resp)
+	case "show":
+		if len(args) < 2 {
+			return solo.ErrInvalidArgument("missing event id")
+		}
+		id, _ := strconv.Atoi(args[1])
+		resp, err := app.ShowAudit(id)
+		if err != nil {
+			return err
+		}
+		return writeOK(resp)
+	default:
+		return solo.ErrInvalidArgument("unknown audit subcommand")
+	}
+}
+
+func parsePriority(raw string, fallback int) int {
+	v, err := strconv.Atoi(raw)
+	if err == nil && v >= 1 && v <= 5 {
+		return v
+	}
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "low":
+		return 2
+	case "medium":
+		return 3
+	case "high":
+		return 4
+	case "critical":
+		return 5
+	default:
+		return fallback
+	}
+}
+
+func writeOK(v any) error {
+	return writeJSON(map[string]any{"ok": true, "data": v})
 }
 
 func writeJSON(v any) error {
