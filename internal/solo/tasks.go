@@ -350,6 +350,41 @@ func decodeCommitShas(shas []string) []map[string]string {
 	return out
 }
 
+func (a *App) TaskTree(taskID string) (map[string]any, error) {
+	return a.withDB(func(db *sql.DB) (map[string]any, error) {
+		rows, err := db.Query(`WITH RECURSIVE tree(id, parent_task, depth) AS (
+			SELECT id, parent_task, 0 FROM tasks WHERE id=?
+			UNION ALL
+			SELECT t.id, t.parent_task, tree.depth+1 FROM tasks t JOIN tree ON t.parent_task=tree.id
+		)
+		SELECT t.id, t.parent_task, t.title, t.status, t.priority, tree.depth
+		FROM tree JOIN tasks t ON t.id=tree.id
+		ORDER BY tree.depth, CAST(SUBSTR(t.id,3) AS INTEGER)`, taskID)
+		if err != nil {
+			return nil, err
+		}
+		defer rows.Close()
+		nodes := []map[string]any{}
+		for rows.Next() {
+			var id, title, status string
+			var parent sql.NullString
+			var priority, depth int
+			if err := rows.Scan(&id, &parent, &title, &status, &priority, &depth); err != nil {
+				return nil, err
+			}
+			var parentVal any
+			if parent.Valid {
+				parentVal = parent.String
+			}
+			nodes = append(nodes, map[string]any{"id": id, "parent_task": parentVal, "title": title, "status": status, "priority": priority, "depth": depth})
+		}
+		if len(nodes) == 0 {
+			return nil, errTaskNotFound(taskID)
+		}
+		return map[string]any{"task_id": taskID, "nodes": nodes}, nil
+	})
+}
+
 func (a *App) UpdateTask(taskID, title, description, priority, parent string, labels, affectedFiles []string, expectedVersion int) (map[string]any, error) {
 	if expectedVersion <= 0 {
 		return nil, ErrInvalidArgument("--version is required")
