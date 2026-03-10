@@ -90,3 +90,28 @@ func TestRepoDiscoveryUsesParentGit(t *testing.T) {
 		t.Fatalf("expected %s got %s", tmp, root)
 	}
 }
+
+func TestInstallSoloSkillScopes(t *testing.T) {
+	tmp := t.TempDir()
+	envPath, err := installSoloSkill(tmp, "environment", "")
+	if err != nil {
+		t.Fatalf("install env skill: %v", err)
+	}
+	if _, err := os.Stat(envPath); err != nil {
+		t.Fatalf("env skill missing: %v", err)
+	}
+	agentPath, err := installSoloSkill(tmp, "agent", "opencode")
+	if err != nil {
+		t.Fatalf("install agent skill: %v", err)
+	}
+	if _, err := os.Stat(agentPath); err != nil {
+		t.Fatalf("agent skill missing: %v", err)
+	}
+}
+
+func TestInstallSoloSkillRequiresAgentWhenScoped(t *testing.T) {
+	tmp := t.TempDir()
+	if _, err := installSoloSkill(tmp, "agent", ""); err == nil {
+		t.Fatalf("expected error for missing agent")
+	}
+}

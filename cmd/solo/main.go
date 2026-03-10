@@ -34,13 +34,22 @@ func run(app *solo.App, args []string) error {
 	switch args[0] {
 	case "init":
 		machineID := ""
+		skillScope := "environment"
+		skillAgent := ""
+		installSkill := false
 		for i := 1; i < len(args); i++ {
-			if args[i] == "--machine-id" && i+1 < len(args) {
-				machineID = args[i+1]
-				i++
+			switch args[i] {
+			case "--machine-id":
+				machineID = val(args, &i)
+			case "--install-skill":
+				installSkill = true
+			case "--skill-scope":
+				skillScope = val(args, &i)
+			case "--agent":
+				skillAgent = val(args, &i)
 			}
 		}
-		resp, err := app.Init(machineID)
+		resp, err := app.Init(machineID, skillScope, skillAgent, installSkill)
 		if err != nil {
 			return err
 		}

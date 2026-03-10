@@ -20,42 +20,65 @@ type App struct{}
 
 func NewApp() *App { return &App{} }
 
-func (a *App) Init(machineID string) (map[string]any, error) {
+func (a *App) Init(machineID, skillScope, skillAgent string, installSkill bool) (map[string]any, error) {
 	root, err := discoverRepoRoot(".")
 	if err != nil {
 		return nil, err
 	}
 	soloDir := filepath.Join(root, ".solo")
 	dbPath := filepath.Join(soloDir, "solo.db")
+	alreadyInitialized := false
 	if _, err := os.Stat(dbPath); err == nil {
-		return nil, errAlreadyInitialized()
+		alreadyInitialized = true
 	}
 	if err := os.MkdirAll(soloDir, 0o755); err != nil {
 		return nil, err
 	}
-	db, err := openDB(dbPath)
-	if err != nil {
-		return nil, err
+	if !alreadyInitialized {
+		db, err := openDB(dbPath)
+		if err != nil {
+			return nil, err
+		}
+		defer db.Close()
+		if err := applySchema(db); err != nil {
+			return nil, err
+		}
+		if machineID == "" {
+			machineID, _ = os.Hostname()
+			if machineID == "" {
+				machineID = "default"
+			}
+		}
+		if err := setDefaultConfig(db, machineID); err != nil {
+			return nil, err
+		}
+	} else if !installSkill {
+		return nil, errAlreadyInitialized()
 	}
-	defer db.Close()
-	if err := applySchema(db); err != nil {
-		return nil, err
-	}
+
 	if machineID == "" {
 		machineID, _ = os.Hostname()
 		if machineID == "" {
 			machineID = "default"
 		}
 	}
-	if err := setDefaultConfig(db, machineID); err != nil {
-		return nil, err
-	}
-	return map[string]any{
-		"initialized":    true,
+	resp := map[string]any{
+		"initialized":    !alreadyInitialized,
 		"database":       dbPath,
 		"machine_id":     machineID,
 		"schema_version": 2,
-	}, nil
+	}
+	if installSkill {
+		path, err := installSoloSkill(root, skillScope, skillAgent)
+		if err != nil {
+			return nil, err
+		}
+		resp["skill"] = skillInstallSummary(skillScope, path)
+	}
+	if alreadyInitialized {
+		resp["already_initialized"] = true
+	}
+	return resp, nil
 }
 
 func (a *App) withDB(op func(*sql.DB) (map[string]any, error)) (map[string]any, error) {
