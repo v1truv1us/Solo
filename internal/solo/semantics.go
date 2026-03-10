@@ -2,8 +2,6 @@ package solo
 
 import "strings"
 
-var canonicalTaskStatuses = []string{"draft", "ready", "active", "completed", "failed", "blocked", "cancelled"}
-
 func normalizeTaskStatus(raw string) (string, bool) {
 	s := strings.ToLower(strings.TrimSpace(raw))
 	switch s {
