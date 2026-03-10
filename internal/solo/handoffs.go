@@ -63,7 +63,7 @@ func (a *App) CreateHandoff(taskID, summary, remaining, to string, files []strin
 			if err != nil {
 				return err
 			}
-			n, _ := res.RowsAffected()
+			n, _ = res.RowsAffected()
 			if n == 0 {
 				return errVersionConflict()
 			}
