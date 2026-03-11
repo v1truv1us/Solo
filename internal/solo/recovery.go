@@ -109,7 +109,7 @@ func recoverExpiredReservation(ctx context.Context, conn *sql.Conn, reservationI
 		return err
 	}
 	res, err := conn.ExecContext(ctx, `UPDATE tasks SET status='ready', version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
-		WHERE id=? AND version=? AND status='active'`, taskID, version)
+		WHERE id=? AND version=? AND status IN ('active','in_progress')`, taskID, version)
 	if err != nil {
 		return err
 	}
@@ -144,7 +144,7 @@ func recoverZombieSession(ctx context.Context, conn *sql.Conn, z zombieSession) 
 	if _, err := conn.ExecContext(ctx, `UPDATE reservations SET active=0, released_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), release_reason='recovered' WHERE id=? AND active=1`, z.ReservationID); err != nil {
 		return err
 	}
-	resTask, err := conn.ExecContext(ctx, `UPDATE tasks SET status='ready', version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=? AND status='active'`, z.TaskID, version)
+	resTask, err := conn.ExecContext(ctx, `UPDATE tasks SET status='ready', version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=? AND status IN ('active','in_progress')`, z.TaskID, version)
 	if err != nil {
 		return err
 	}

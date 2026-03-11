@@ -38,6 +38,7 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 		var taskVersion int
 		var inProgressVersion int
 		var expiresAt string
+		activeStored := taskStatusForWrite(db, "active")
 
 		if err := withImmediateTx(ctx, db, func(conn *sql.Conn) error {
 			var activeSlots int
@@ -87,7 +88,7 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 				}
 				return err
 			}
-			res, err := conn.ExecContext(ctx, `UPDATE tasks SET status='active', version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=?`, taskID, taskVersion)
+			res, err := conn.ExecContext(ctx, `UPDATE tasks SET status=?, version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=?`, activeStored, taskID, taskVersion)
 			if err != nil {
 				return err
 			}
@@ -146,11 +147,12 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 
 func (a *App) compensateStartFailure(db *sql.DB, taskID, sessionID, reservationID, worktreePath string, expectedVersion int) error {
 	ctx := context.Background()
+	activeStored := taskStatusForWrite(db, "active")
 	return withImmediateTx(ctx, db, func(conn *sql.Conn) error {
 		_, _ = conn.ExecContext(ctx, `DELETE FROM sessions WHERE id=?`, sessionID)
 		_, _ = conn.ExecContext(ctx, `DELETE FROM reservations WHERE id=?`, reservationID)
 		_, _ = conn.ExecContext(ctx, `DELETE FROM worktrees WHERE path=? AND status='cleanup_pending'`, worktreePath)
-		_, _ = conn.ExecContext(ctx, `UPDATE tasks SET status='ready', version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=? AND status='active'`, taskID, expectedVersion)
+		_, _ = conn.ExecContext(ctx, `UPDATE tasks SET status='ready', version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=? AND status=?`, taskID, expectedVersion, activeStored)
 		return nil
 	})
 }
@@ -206,7 +208,8 @@ func (a *App) EndSession(taskID, result, notes string, commits, files []string, 
 				target = "failed"
 			}
 			if target != "active" {
-				res, err = conn.ExecContext(ctx, `UPDATE tasks SET status=?, version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=?`, target, taskID, currentVersion)
+				storedTarget := taskStatusForWrite(db, target)
+				res, err = conn.ExecContext(ctx, `UPDATE tasks SET status=?, version=version+1, updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND version=?`, storedTarget, taskID, currentVersion)
 				if err != nil {
 					return err
 				}

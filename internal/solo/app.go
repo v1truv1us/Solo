@@ -92,6 +92,9 @@ func (a *App) withDB(op func(*sql.DB) (map[string]any, error)) (map[string]any, 
 		return nil, err
 	}
 	defer db.Close()
+	if err := applySchema(db); err != nil {
+		return nil, err
+	}
 	lazyZombieScan(db)
 	return op(db)
 }
