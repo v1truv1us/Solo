@@ -89,6 +89,14 @@ func run(app *solo.App, args []string) error {
 			return err
 		}
 		return writeOK(resp)
+	case "dashboard":
+		addr := ":8081"
+		for i := 1; i < len(args); i++ {
+			if args[i] == "--addr" {
+				addr = val(args, &i)
+			}
+		}
+		return app.RunDashboard(addr)
 	case "task":
 		return runTask(app, args[1:])
 	case "session":
