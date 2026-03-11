@@ -79,9 +79,9 @@ Solo could suggest which available task an agent should pick up next, based on p
 
 ### Visual Dashboard
 
-A local web UI or TUI for visualizing task state, session history, and the dependency graph.
+✅ **Delivered (read-only milestone):** `solo dashboard --addr :8081` now provides a lightweight local web UI, deterministic JSON snapshot endpoint (`/api/dashboard`), and Prometheus-compatible metrics (`/metrics`) for Grafana.
 
-**Challenges:** Adds significant complexity for a use case that the CLI already covers. Would only make sense if the user base expands to people who prefer visual tools over CLI.
+**Follow-up candidates:** richer filtering, dependency graph view, and optional Infinity datasource JSON endpoint variants.
 
 ### Plugin System
 

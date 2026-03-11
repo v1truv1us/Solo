@@ -140,6 +140,7 @@ Solo provides **persistent coordination memory** that outlives any individual ag
 - **Automatic crash recovery** — dead PIDs and abandoned sessions are reclaimed on next invocation
 - **SQLite WAL concurrency** — safe for concurrent agent processes
 - **JSON-first CLI** — every command outputs structured JSON for automation
+- **Read-only web dashboard** — optional live UI + `/metrics` endpoint for Grafana/Prometheus
 
 ---
 
@@ -150,8 +151,8 @@ Solo is intentionally minimal.
 | Principle | Meaning |
 |---|---|
 | Local only | No network, no cloud, no accounts |
-| No daemon | No background process. CLI invocations are fully self-contained |
-| No server | Nothing to start, stop, or manage |
+| No daemon | No background scheduler. Core lifecycle stays CLI-driven |
+| Optional dashboard server | `solo dashboard` is read-only and opt-in for observability |
 | Deterministic | Same inputs always produce same outputs |
 | Ledger, not orchestrator | Solo tracks what happened. It never runs agents |
 
@@ -200,6 +201,11 @@ solo session end T-1 --result completed
 
 # Or hand off to another agent
 solo handoff create T-1 --summary "Done" --remaining-work "Tests" --to aider
+
+# Optional: start read-only dashboard + metrics endpoint
+solo dashboard --addr :8081
+# UI: http://localhost:8081/
+# Prometheus: http://localhost:8081/metrics
 ```
 
 ---
@@ -219,6 +225,7 @@ solo handoff create T-1 --summary "Done" --remaining-work "Tests" --to aider
 | [Security Model](docs/SECURITY_MODEL.md) | Trust boundaries and threat model |
 | [Testing Strategy](docs/TESTING_STRATEGY.md) | Test categories and coverage |
 | [Roadmap](docs/ROADMAP.md) | Planned and future work |
+| [Grafana Dashboard](grafana/README.md) | Setup Solo metrics in Grafana/Prometheus |
 | [Contributing](docs/CONTRIBUTING.md) | How to contribute |
 
 ---

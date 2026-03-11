@@ -82,6 +82,39 @@ solo search "retry logic" --status ready
 
 ---
 
+### `solo dashboard`
+
+Start an optional read-only web dashboard with JSON and metrics endpoints.
+
+```bash
+solo dashboard --addr :8081
+```
+
+Served endpoints:
+
+- `/` — HTML dashboard
+- `/api/dashboard` — deterministic JSON snapshot (`{ "ok": true, "data": ... }`)
+- `/metrics` — Prometheus text format metrics
+
+**Flags:**
+| Flag | Description |
+|---|---|
+| `--addr <host:port>` | Listen address (default: `:8081`) |
+
+**Core metrics exported:**
+
+- `solo_tasks_total`
+- `solo_tasks_by_status{status="..."}`
+- `solo_active_sessions`
+- `solo_active_reservations`
+- `solo_pending_handoffs`
+- `solo_worktrees_active`
+- `solo_worktrees_cleanup_pending`
+- `solo_db_size_bytes`
+- `solo_zombie_sessions`
+
+---
+
 ## Task Commands
 
 ### `solo task create`
