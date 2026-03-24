@@ -93,12 +93,17 @@ func TestRepoDiscoveryUsesParentGit(t *testing.T) {
 
 func TestInstallSoloSkillScopes(t *testing.T) {
 	tmp := t.TempDir()
+	createSoloSkillFixture(t, tmp)
 	envPath, err := installSoloSkill(tmp, "environment", "")
 	if err != nil {
 		t.Fatalf("install env skill: %v", err)
 	}
 	if _, err := os.Stat(envPath); err != nil {
 		t.Fatalf("env skill missing: %v", err)
+	}
+	envRef := filepath.Join(tmp, ".solo", "skills", "solo", "references", "commands.md")
+	if _, err := os.Stat(envRef); err != nil {
+		t.Fatalf("env skill reference missing: %v", err)
 	}
 	agentPath, err := installSoloSkill(tmp, "agent", "opencode")
 	if err != nil {
@@ -107,11 +112,71 @@ func TestInstallSoloSkillScopes(t *testing.T) {
 	if _, err := os.Stat(agentPath); err != nil {
 		t.Fatalf("agent skill missing: %v", err)
 	}
+	agentRef := filepath.Join(tmp, ".solo", "skills", "agents", "opencode", "solo", "references", "commands.md")
+	if _, err := os.Stat(agentRef); err != nil {
+		t.Fatalf("agent skill reference missing: %v", err)
+	}
 }
 
 func TestInstallSoloSkillRequiresAgentWhenScoped(t *testing.T) {
 	tmp := t.TempDir()
 	if _, err := installSoloSkill(tmp, "agent", ""); err == nil {
 		t.Fatalf("expected error for missing agent")
+	}
+}
+
+func TestInstallSoloSkillFallsBackToTemplate(t *testing.T) {
+	tmp := t.TempDir()
+	skillPath, err := installSoloSkill(tmp, "environment", "")
+	if err != nil {
+		t.Fatalf("install fallback skill: %v", err)
+	}
+	content, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("read fallback skill: %v", err)
+	}
+	if !strings.Contains(string(content), "allowed-tools: Bash(solo:*)") {
+		t.Fatalf("expected fallback skill content to include allowed-tools")
+	}
+}
+
+func TestInstallSoloSkillKeepsExistingBundleOnCopyFailure(t *testing.T) {
+	tmp := t.TempDir()
+	existingDir := filepath.Join(tmp, ".solo", "skills", "solo")
+	if err := os.MkdirAll(existingDir, 0o755); err != nil {
+		t.Fatalf("mkdir existing dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(existingDir, "SKILL.md"), []byte("old bundle\n"), 0o644); err != nil {
+		t.Fatalf("write existing skill: %v", err)
+	}
+	createSoloSkillFixture(t, tmp)
+	badLink := filepath.Join(tmp, "skills", "solo", "broken-link")
+	if err := os.Symlink(filepath.Join(tmp, "skills", "solo", "SKILL.md"), badLink); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+	if _, err := installSoloSkill(tmp, "environment", ""); err == nil {
+		t.Fatalf("expected install failure for unsupported symlink entry")
+	}
+	content, err := os.ReadFile(filepath.Join(existingDir, "SKILL.md"))
+	if err != nil {
+		t.Fatalf("read existing skill after failed install: %v", err)
+	}
+	if string(content) != "old bundle\n" {
+		t.Fatalf("expected existing skill bundle to remain intact, got %q", string(content))
+	}
+}
+
+func createSoloSkillFixture(t *testing.T, root string) {
+	t.Helper()
+	skillDir := filepath.Join(root, "skills", "solo")
+	refDir := filepath.Join(skillDir, "references")
+	if err := os.MkdirAll(refDir, 0o755); err != nil {
+		t.Fatalf("mkdir skill fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: solo\n---\nfixture\n"), 0o644); err != nil {
+		t.Fatalf("write fixture skill: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(refDir, "commands.md"), []byte("# Commands\n"), 0o644); err != nil {
+		t.Fatalf("write fixture ref: %v", err)
 	}
 }

@@ -163,15 +163,15 @@ Solo is intentionally minimal.
 ## Installation
 
 ```bash
-go install github.com/solo-dev/solo@latest
+git clone https://github.com/v1truv1us/Solo.git
+cd Solo
+make build
 ```
 
-Or build from source:
+Then initialize a Git repo with Solo and install the repo-local skill bundle if you want agent guidance in `.solo/skills`:
 
 ```bash
-git clone https://github.com/solo-dev/solo
-cd solo
-make build
+./solo init --install-skill --json
 ```
 
 ---
@@ -214,19 +214,17 @@ solo dashboard --addr :8081
 
 | Document | Description |
 |---|---|
-| [PRD](docs/PRD.md) | Product requirements and user stories |
-| [Architecture](docs/ARCHITECTURE.md) | System design and component overview |
-| [Design Principles](docs/DESIGN_PRINCIPLES.md) | Philosophy and constraints |
-| [Data Model](docs/DATA_MODEL.md) | Core entities and schema |
-| [CLI Reference](docs/CLI_REFERENCE.md) | Full command reference |
-| [Workflows](docs/WORKFLOWS.md) | Common usage patterns |
-| [Agent Integration](docs/AGENT_INTEGRATION.md) | How agents should use Solo |
-| [Failure & Recovery](docs/FAILURE_AND_RECOVERY.md) | Crash handling and recovery |
-| [Security Model](docs/SECURITY_MODEL.md) | Trust boundaries and threat model |
-| [Testing Strategy](docs/TESTING_STRATEGY.md) | Test categories and coverage |
-| [Roadmap](docs/ROADMAP.md) | Planned and future work |
+| [PRD](PRD%20(1).md) | Product requirements and user stories |
+| [Architecture](ARCHITECTURE.md) | System design and component overview |
+| [Design Principles](DESIGN_PRINCIPLES%20(1).md) | Philosophy and constraints |
+| [Data Model](DATA_MODEL%20(1).md) | Core entities and schema |
+| [CLI Reference](CLI_REFERENCE%20(1).md) | Full command reference |
+| [Agent Integration](AGENT_INTEGRATION.md) | How agents should use Solo |
+| [Failure & Recovery](FAILURE_AND_RECOVERY%20(1).md) | Crash handling and recovery |
+| [Security Model](SECURITY_MODEL.md) | Trust boundaries and threat model |
+| [Testing Strategy](TESTING_STRATEGY.md) | Test categories and coverage |
+| [Roadmap](ROADMAP.md) | Planned and future work |
 | [Grafana Dashboard](grafana/README.md) | Setup Solo metrics in Grafana/Prometheus |
-| [Contributing](docs/CONTRIBUTING.md) | How to contribute |
 
 ---
 
