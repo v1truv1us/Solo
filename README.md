@@ -168,7 +168,7 @@ cd Solo
 make build
 ```
 
-Then initialize a Git repo with Solo and install the repo-local skill bundle if you want agent guidance in `.solo/skills`:
+Then initialize a Git repository with Solo and install the repo-local skill bundle to provide agent guidance in `.solo/skills`:
 
 ```bash
 ./solo init --install-skill --json
