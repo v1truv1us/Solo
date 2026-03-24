@@ -1,0 +1,439 @@
+name: Release
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: windows
+            arch: amd64
+            ext: .exe
+          - os: darwin
+            arch: amd64
+            ext: ''
+          - os: darwin
+            arch: arm64
+            ext: ''
+          - os: linux
+            arch: amd64
+            ext: ''
+          - os: linux
+            arch: arm64
+            ext: ''
+    outputs:
+      os: ${{ matrix.os }}
+      arch: ${{ matrix.arch }}
+      ext: ${{ matrix.ext }}
+      artifact_name: solo-${{ matrix.os }}-${{ matrix.arch }}${{ matrix.ext }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22+'
+          cache: true
+
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Build binary
+        run: |
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} go build -tags "fts5" -o solo${{ matrix.ext }} ./cmd/solo
+
+      - name: Verify binary
+        run: |
+          ./solo${{ matrix.ext }} health --json
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: solo-${{ matrix.os }}-${{ matrix.arch }}
+          path: solo${{ matrix.ext }}
+          retention-days: 30
+
+  create_release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref#refs/tags/ }}"
+          else
+            VERSION=$(date -u +%Y.%m.%d)
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Install GitHub CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gh
+
+      - name: Authenticate to GitHub
+        run: |
+          gh auth login --with-token <<< "$GITHUB_TOKEN"
+
+      - name: Check if release exists
+        id: release_check
+        run: |
+          if gh release view "$VERSION" --json id >/dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create or update release
+        run: |
+          if [[ "${{ steps.release_check.outputs.exists }}" == "true" ]]; then
+            echo "Release $VERSION already exists, updating assets..."
+          else
+            echo "Creating new release $VERSION"
+            gh release create "$VERSION" --title "Solo $VERSION" --notes "Auto-generated release"
+          fi
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Upload assets to release
+        run: |
+          for f in artifacts/*/*; do
+            if [ -f "$f" ]; then
+              echo "Uploading $f"
+              gh release upload "$VERSION" "$f" --clobber
+            fi
+          done
+
+  publish_homebrew:
+    needs: create_release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags:v'))
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref#refs/tags/ }}"
+          else
+            VERSION=$(date -u +%Y.%m.%d)
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.2'
+
+      - name: Install Homebrew Linuxbrew (if on Linux)
+        if: runner.os == 'Linux'
+        run: |
+          /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          echo "$HOME/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/bin" >> $GITHUB_PATH
+
+      - name: Configure Homebrew tap
+        run: |
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          mkdir -p ~/homebrew
+          cd ~/homebrew
+          git clone https://${HOMEBREW_GIT_AUTH}@github.com/<your_username>/homebrew-solo.git
+          cd homebrew-solo
+
+      - name: Download Darwin binaries
+        run: |
+          mkdir -p darwin_binaries
+          cd darwin_binaries
+          gh release download "$VERSION" --pattern "solo-darwin-*" --clobber
+          cd ..
+
+      - name: Compute SHA256 for Darwin binaries
+        id: shasum
+        run: |
+          echo "amd64_sha256=$(shasum -a 256 darwin_binaries/solo-darwin-amd64 | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          echo "arm64_sha256=$(shasum -a 256 darwin_binaries/solo-darwin-arm64 | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+
+      - name: Generate Homebrew formula
+        run: |
+          cat > Solo.rb <<'EOF'
+class Solo < Formula
+  desc "Local orchestration layer for coordinating multiple coding agents"
+  homepage "https://github.com/<your_username>/solo"
+  version "$VERSION"
+  if OS.mac? && Hardware::CPU.intel?
+    url "https://github.com/<your_username>/solo/releases/download/v$VERSION/solo-darwin-amd64"
+    sha256 "$am64_sha256"
+  elsif OS.mac? && Hardware::CPU.arm?
+    url "https://github.com/<your_username>/solo/releases/download/v$VERSION/solo-darwin-arm64"
+    sha256 "$arm64_sha256"
+  end
+  def install
+    bin.install "solo"
+  end
+EOF
+
+      - name: Commit and push formula
+        run: |
+          cd homebrew-solo
+          cp ../Solo.rb Solo.rb
+          git add Solo.rb
+          git commit -m "Update Solo to $VERSION" || echo "No changes to commit"
+          git push origin main
+
+  publish_chocolatey:
+    needs: create_release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags:v')) && env.CHOCOLATEY_API_KEY != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref#refs/tags/ }}"
+          else
+            VERSION=$(date -u +%Y.%m.%d)
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Set up Chocolatey
+        uses: chocolatey/setup-chocolatey@v1
+        with:
+          chocolatey-version: latest
+
+      - name: Download Windows binary
+        run: |
+          mkdir -p windows_binary
+          cd windows_binary
+          gh release download "$VERSION" --pattern "solo-windows-amd64.exe" --clobber
+          mv solo-windows-amd64.exe solo.exe
+          cd ..
+
+      - name: Compute SHA256 for Windows binary
+        id: shasum
+        run: |
+          echo "sha256=$(shasum -a 256 windows_binary/solo.exe | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+
+      - name: Create Chocolatey package
+        run: |
+          mkdir -p choco_package
+          cd choco_package
+          choco new solo
+          cd solo
+          cat > solo.nuspec <<'EOF'
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>solo</id>
+    <version>$VERSION</version>
+    <authors>Your Name</authors>
+    <owners>Your Name</owners>
+    <description>Local orchestration layer for coordinating multiple coding agents</description>
+    <projectUrl>https://github.com/<your_username>/solo</projectUrl>
+    <licenseUrl>https://github.com/<your_username>/solo/blob/main/LICENSE</licenseUrl>
+    <icon>icon.png</icon>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <releaseNotes>Auto-generated release</releaseNotes>
+    <tags>cli orchestration agents</tags>
+    <files>
+      <file src="..\windows_binary\solo.exe" target="tools" />
+    </files>
+  </metadata>
+</package>
+EOF
+          cd ..
+          choco pack solo\solo.nuspec
+
+      - name: Publish to Chocolatey
+        env:
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          choco push solo.$VERSION.nupkg -k $CHOCOLATEY_API_KEY -s https://push.chocolatey.org/
+
+  publish_scoop:
+    needs: create_release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags:v'))
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref#refs/tags/ }}"
+          else
+            VERSION=$(date -u +%Y.%m.%d)
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Download Windows binary
+        run: |
+          mkdir -p windows_binary
+          cd windows_binary
+          gh release download "$VERSION" --pattern "solo-windows-amd64.exe" --clobber
+          mv solo-windows-amd64.exe solo.exe
+          cd ..
+
+      - name: Compute SHA256 for Windows binary
+        id: shasum
+        run: |
+          echo "sha256=$(shasum -a 256 windows_binary/solo.exe | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+
+      - name: Create Scoop manifest
+        run: |
+          mkdir -p scoop_manifest
+          cd scoop_manifest
+          cat > solo.json <<EOF
+{
+  "version": "$VERSION",
+  "url": "https://github.com/<your_username>/solo/releases/download/v$VERSION/solo-windows-amd64.exe",
+  "hash": "${{ steps.shasum.outputs.sha256 }}",
+  "bin": "solo.exe"
+}
+EOF
+
+      - name: Upload Scoop manifest as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scoop-manifest
+          path: scoop_manifest/solo.json
+
+      - name: Push to Scoop bucket (if token exists)
+        if: ${{ secrets.SCOOP_TOKEN != '' }}
+        run: |
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git clone https://${{ secrets.SCOOP_TOKEN }}@github.com/<your_username>/scoop-bucket.git
+          cd scoop-bucket
+          cp ../scoop_manifest/solo.json .
+          git add solo.json
+          git commit -m "Add solo $VERSION"
+          git push origin main
+
+  publish_apt:
+    needs: create_release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags:v')) && env.PACKAGECLOUD_TOKEN != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref#refs/tags/ }}"
+          else
+            VERSION=$(date -u +%Y.%m.%d)
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Install fpm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby-dev rubygems build-essential
+          sudo gem install fpm -no-document
+
+      - name: Download Linux binaries
+        run: |
+          mkdir -p linux_binaries
+          cd linux_binaries
+          gh release download "$VERSION" --pattern "solo-linux-*" --clobber
+          cd ..
+
+      - name: Create APT packages
+        id: apt_pkgs
+        run: |
+          mkdir -p apt_packages
+          fpm -s dir -t deb -n solo -v $VERSION -a amd64 \
+            -C linux_binaries \
+            solo-linux-amd64=/usr/bin/solo \
+            --package apt_packages/solo_${VERSION}_amd64.deb
+          fpm -s dir -t deb -n solo -v $VERSION -a arm64 \
+            -C linux_binaries \
+            solo-linux-arm64=/usr/bin/solo \
+            --package apt_packages/solo_${VERSION}_arm64.deb
+          echo "deb_files=$(ls apt_packages/*.deb | tr '\n' ',' | sed 's/,$//')" >> $GITHUB_OUTPUT
+
+      - name: Publish to Package Cloud (APT repository)
+        env:
+          PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
+        run: |
+          for deb in ${{ steps.apt_pkgs.outputs.deb_files }}; do
+            package_cloud push <your_username>/solo/ubuntu/focal "$deb"
+          done
+
+  publish_rpm:
+    needs: create_release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags:v')) && env.PACKAGECLOUD_TOKEN != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: version
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            VERSION="${{ github.ref#refs/tags/ }}"
+          else
+            VERSION=$(date -u +%Y.%m.%d)
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Install fpm
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby-dev rubygems build-essential
+          sudo gem install fpm -no-document
+
+      - name: Download Linux binaries
+        run: |
+          mkdir -p linux_binaries
+          cd linux_binaries
+          gh release download "$VERSION" --pattern "solo-linux-*" --clobber
+          cd ..
+
+      - name: Create RPM packages
+        id: rpm_pkgs
+        run: |
+          mkdir -p rpm_packages
+          fpm -s dir -t rpm -n solo -v $VERSION -a amd64 \
+            -C linux_binaries \
+            solo-linux-amd64=/usr/bin/solo \
+            --package rpm_packages/solo-${VERSION}-1.amd64.rpm
+          fpm -s dir -t rpm -n solo -v $VERSION -a arm64 \
+            -C linux_binaries \
+            solo-linux-arm64=/usr/bin/solo \
+            --package rpm_packages/solo-${VERSION}-1.arm64.rpm
+          echo "rpm_files=$(ls rpm_packages/*.rpm | tr '\n' ',' | sed 's/,$//')" >> $GITHUB_OUTPUT
+
+      - name: Publish to Package Cloud (YUM repository)
+        env:
+          PACKAGECLOUD_TOKEN: ${{ secrets.PACKAGECLOUD_TOKEN }}
+        run: |
+          for rpm in ${{ steps.rpm_pkgs.outputs.rpm_files }}; do
+            package_cloud push <your_username>/solo/el/9 "$rpm"
+          done
