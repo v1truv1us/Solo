@@ -25,7 +25,7 @@ Without coordination, these agents:
 - break handoffs — the next agent doesn't know what the previous one did
 - overwrite each other's changes in shared branches
 
-There is currently no durable coordination layer between agents. Solo fills that gap.
+Solo provides a durable coordination layer between agents.
 
 ---
 
@@ -125,7 +125,7 @@ Between sessions, they forget:
 - what remains to be done
 - what decisions were made and why
 
-Solo provides **persistent coordination memory** that outlives any individual agent session.
+Solo preserves coordination state across agent sessions.
 
 ---
 
@@ -225,6 +225,7 @@ solo dashboard --addr :8081
 | [Testing Strategy](TESTING_STRATEGY.md) | Test categories and coverage |
 | [Roadmap](ROADMAP.md) | Planned and future work |
 | [Grafana Dashboard](grafana/README.md) | Setup Solo metrics in Grafana/Prometheus |
+| [Contributing](CONTRIBUTING.md) | How to contribute |
 
 ---
 
