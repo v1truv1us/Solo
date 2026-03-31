@@ -66,7 +66,7 @@ func (a *App) Init(machineID, skillScope, skillAgent string, installSkill bool) 
 		"initialized":    !alreadyInitialized,
 		"database":       dbPath,
 		"machine_id":     machineID,
-		"schema_version": 2,
+		"schema_version": 3,
 	}
 	if installSkill {
 		path, err := installSoloSkill(root, skillScope, skillAgent)
