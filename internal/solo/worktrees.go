@@ -34,7 +34,7 @@ func (a *App) InspectWorktree(taskID string) (map[string]any, error) {
 	return a.withDB(func(db *sql.DB) (map[string]any, error) {
 		var path, tID, branch, status, baseRef string
 		var bytes int64
-		if err := db.QueryRow(`SELECT path, task_id, branch_name, status, base_ref, COALESCE(disk_usage_bytes, 0) FROM worktrees WHERE task_id=? AND status!='cleaned' ORDER BY created_at DESC LIMIT 1`, taskID).
+		if err := db.QueryRow(`SELECT path, task_id, branch_name, status, base_ref, COALESCE(disk_usage_bytes, 0) FROM worktrees WHERE task_id=? ORDER BY created_at DESC LIMIT 1`, taskID).
 			Scan(&path, &tID, &branch, &status, &baseRef, &bytes); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil, errWith("WORKTREE_NOT_FOUND", "No worktree for task: "+taskID, false, "")
@@ -62,7 +62,7 @@ func (a *App) CleanupWorktrees(taskID string, force bool) (map[string]any, error
 		if err != nil {
 			return nil, err
 		}
-		query := `SELECT path, task_id, branch_name FROM worktrees WHERE status!='cleaned'`
+		query := `SELECT path, task_id, branch_name FROM worktrees WHERE 1=1`
 		args := []any{}
 		if taskID != "" {
 			query += ` AND task_id=?`
@@ -100,7 +100,7 @@ func (a *App) CleanupWorktrees(taskID string, force bool) (map[string]any, error
 			_ = deleteBranch(repoRoot, branch, force)
 			ctx := context.Background()
 			if err := withImmediateTx(ctx, db, func(conn *sql.Conn) error {
-				_, err := conn.ExecContext(ctx, `UPDATE worktrees SET status='cleaned', cleaned_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE path=?`, path)
+				_, err := conn.ExecContext(ctx, `DELETE FROM worktrees WHERE path=? AND status IN ('active','cleanup_pending')`, path)
 				return err
 			}); err != nil {
 				skipped = append(skipped, map[string]any{"task_id": tID, "path": path, "reason": err.Error()})

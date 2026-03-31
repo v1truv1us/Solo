@@ -18,6 +18,10 @@ func validateTaskID(id string) error {
 }
 
 func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any, error) {
+	const maxAgentPID = 4194304
+	if pid < 0 || pid > maxAgentPID {
+		return nil, ErrInvalidArgument("--pid must be between 0 and 4194304")
+	}
 	if strings.TrimSpace(worker) == "" {
 		return nil, ErrInvalidArgument("--worker is required")
 	}
@@ -89,7 +93,11 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 			if err := conn.QueryRowContext(ctx, `SELECT expires_at FROM reservations WHERE id=?`, resID).Scan(&expiresAt); err != nil {
 				return err
 			}
-			if _, err := conn.ExecContext(ctx, `INSERT INTO sessions (id, task_id, reservation_id, worker_id, agent_pid) VALUES (?, ?, ?, ?, ?)`, sessionID, taskID, resID, worker, pid); err != nil {
+				var pidVal any
+			if pid > 0 {
+				pidVal = pid
+			}
+			if _, err := conn.ExecContext(ctx, `INSERT INTO sessions (id, task_id, reservation_id, worker_id, agent_pid) VALUES (?, ?, ?, ?, ?)`, sessionID, taskID, resID, worker, pidVal); err != nil {
 				return err
 			}
 			baseCommitSHA := getRefSHA(repoRoot, baseRef)

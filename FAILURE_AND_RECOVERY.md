@@ -20,19 +20,19 @@ Solo's recovery model is based on three principles:
 
 **How Solo detects it:**
 
-Every active reservation records the agent's PID. The zombie scanner, which runs at the start of every CLI invocation, checks each active reservation's PID with:
+Every active session records the agent's PID in `sessions.agent_pid`. The zombie scanner, which runs at the start of every CLI invocation, checks each active session's PID with:
 
 ```go
 err := syscall.Kill(pid, 0)
 // ESRCH means process does not exist
 ```
 
-If the process is dead, the reservation is orphaned.
+If the process is dead, the session is marked as crashed.
 
 **Recovery actions:**
 
-1. End the session with `status: crashed`
-2. Release the reservation
+1. End the session with `status: crashed` and `ended_at` set
+2. Mark reservation as inactive with release_reason = 'recovered'
 3. Restore task status to `ready`
 4. Create a recovery record with: `task_id`, `session_id`, `dead_pid`, `detected_at`, `actions_taken`
 5. Write audit events for each state change
@@ -152,13 +152,14 @@ The zombie scanner is the core of Solo's self-healing capability.
 **What it does:**
 
 ```
-For each reservation where status = 'active':
-  pid = reservation.pid
-  if is_dead(pid):
+For each session where ended_at IS NULL:
+  pid = session.agent_pid
+  if pid > 0 AND is_dead(pid):
     begin transaction
       session.status    = 'crashed'
       session.ended_at  = now()
-      reservation.status = 'recovered'
+      reservation.active = 0
+      reservation.release_reason = 'recovered'
       task.status       = 'ready'
       task.version      += 1
       create recovery_record
@@ -166,9 +167,13 @@ For each reservation where status = 'active':
     commit
 ```
 
-**Performance:** The scan is O(n) where n is the number of active reservations. In practice this is almost always a small number (< 10). The overhead is negligible.
+Note: If `session.agent_pid` is NULL (e.g., started from CLI without --pid flag), the session is not treated as a zombie since there's no valid PID to check.
 
-**Idempotency:** Running the scanner multiple times is safe. A recovered reservation is not re-processed.
+**Performance:** The scan is O(n) where n is the number of active sessions. In practice this is almost always a small number (< 10). The overhead is negligible.
+
+**Idempotency:** Running the scanner multiple times is safe. A session that already has `ended_at` set is not re-processed.
+
+**CLI vs Agent Sessions:** When a session is started from the CLI without the `--pid` flag, `agent_pid` is stored as NULL. This prevents false crash detection since CLI processes exit immediately after the command completes. Agents should always pass their PID via `--pid` to enable proper zombie detection.
 
 ---
 

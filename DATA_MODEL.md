@@ -84,30 +84,36 @@ A reservation is the exclusive ownership record for a task. At most one active r
 | `task_id` | string | The task being reserved |
 | `session_id` | string | The session holding this reservation |
 | `worker` | string | Agent identifier string (e.g. `claude-code`, `aider`) |
-| `pid` | int | OS process ID of the agent process |
 | `started_at` | timestamp | When the reservation was created |
-| `heartbeat_at` | timestamp | Last liveness signal. Updated by session operations. |
-| `status` | enum | `active`, `released`, `recovered` |
+| `expires_at` | timestamp | When the reservation expires (TTL-based) |
+| `active` | int | 1 if active, 0 if released |
+| `released_at` | timestamp | When reservation was released (null if active) |
+| `release_reason` | enum | `completed`, `expired`, `handoff`, `manual`, `recovered` |
+| `worktree_path` | string | Path to the worktree for this reservation |
+| `machine_id` | string | Machine identifier |
 
 ### Reservation Rules
 
 - A task can have at most **one active reservation** at any time
 - Attempting to start a session on an already-reserved task returns `RESERVATION_CONFLICT`
 - A reservation is **released** when its session ends (completed, failed, or handed off)
-- A reservation is **recovered** when zombie scan detects the PID is dead
+- A reservation is **recovered** when zombie scan detects the agent PID is dead
 
 ### Zombie Detection
 
-The zombie scan checks every active reservation:
+The zombie scan checks every active session. The PID is stored in `sessions.agent_pid`:
 
 ```
-For each active reservation:
-  If pid is dead (kill -0 returns ESRCH):
-    → end session with result: crashed
-    → release reservation
+For each session where ended_at IS NULL:
+  pid = session.agent_pid
+  If pid > 0 AND pid is dead (kill -0 returns ESRCH):
+    → end session with status: crashed
+    → set reservation.active = 0, release_reason = 'recovered'
     → restore task status to: ready
     → create recovery record
 ```
+
+Note: Sessions started from CLI without `--pid` flag store NULL in `agent_pid` to avoid false crash detection.
 
 ---
 
@@ -123,12 +129,13 @@ A session is a concrete attempt to perform work on a task. Multiple sessions may
 | `task_id` | string | The task this session works on |
 | `reservation_id` | string | The reservation held during this session |
 | `worker` | string | Agent identifier. **Untrusted.** |
-| `pid` | int | Agent OS process ID |
+| `agent_pid` | int | Agent OS process ID (NULL if not provided) |
 | `status` | enum | `active`, `completed`, `failed`, `crashed`, `handed_off` |
 | `result` | string | Free-form result description. **Untrusted.** |
 | `started_at` | timestamp | |
 | `ended_at` | timestamp | Null while active |
 | `worktree_path` | string | Path to the git worktree for this session |
+| `branch` | string | Git branch name for this worktree |
 
 ### Session Lifecycle
 
@@ -176,14 +183,16 @@ A worktree record tracks the git worktree created for a task session.
 
 | Field | Type | Description |
 |---|---|---|
-| `id` | string | Format: `W-{n}` |
-| `task_id` | string | |
-| `session_id` | string | The session that owns this worktree |
-| `path` | string | Absolute path to the worktree on disk |
-| `branch` | string | Git branch name for this worktree |
-| `status` | enum | `active`, `inactive`, `cleaned_up` |
-| `created_at` | timestamp | |
-| `cleaned_up_at` | timestamp | Null until explicitly cleaned |
+| `path` | string | Primary key. Absolute path to the worktree on disk |
+| `task_id` | string | The task this worktree belongs to |
+| `branch_name` | string | Git branch name for this worktree |
+| `base_ref` | string | Base ref for the worktree (e.g., `origin/main`) |
+| `base_commit_sha` | string | Commit SHA at creation time |
+| `status` | enum | `active`, `cleanup_pending` |
+| `disk_usage_bytes` | int | Size of worktree on disk |
+| `created_at` | timestamp | When the worktree was created |
+
+Note: Worktree records are deleted (not marked as cleaned) when cleanup completes. The `cleanup_pending` status indicates the worktree has been removed from disk but the DB record is pending deletion.
 
 ### Worktree Paths
 

@@ -101,10 +101,9 @@ func applySchema(db *sql.DB) error {
 			branch_name TEXT NOT NULL,
 			base_ref TEXT NOT NULL DEFAULT 'origin/main',
 			base_commit_sha TEXT,
-			status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'cleanup_pending', 'cleaned')),
+			status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'cleanup_pending')),
 			disk_usage_bytes INTEGER,
-			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-			cleaned_at TEXT
+			created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_worktrees_task ON worktrees(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_worktrees_status ON worktrees(status)`,
@@ -169,6 +168,8 @@ func applySchema(db *sql.DB) error {
 		_, _ = conn.ExecContext(ctx, `UPDATE tasks SET status='completed' WHERE status='done'`)
 		_, _ = conn.ExecContext(ctx, `UPDATE tasks SET priority=2 WHERE priority < 2`)
 		_, _ = conn.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version (version, description) VALUES (2, 'Canonical task lifecycle + priority semantics')`)
+		_, _ = conn.ExecContext(ctx, `DELETE FROM worktrees WHERE status='cleaned'`)
+		_, _ = conn.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version (version, description) VALUES (3, 'Remove stale cleaned worktree rows')`)
 		return nil
 	})
 }

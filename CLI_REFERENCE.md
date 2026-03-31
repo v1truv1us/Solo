@@ -54,10 +54,10 @@ solo health --json
   "ok": true,
   "data": {
     "db_path": ".solo/solo.db",
-    "schema_version": 1,
+    "schema_version": 3,
     "active_sessions": 2,
     "pending_recovery": 0,
-    "worktrees": { "active": 2, "inactive": 1 }
+    "worktrees": { "active": 2, "cleanup_pending": 1 }
   }
 }
 ```
@@ -330,7 +330,7 @@ solo session start T-142 --worker claude-code --json
 | Flag | Description |
 |---|---|
 | `--worker <name>` | Agent identifier string (required) |
-| `--pid <n>` | Override PID for reservation (default: current process PID) |
+| `--pid <n>` | Agent process ID for zombie detection (default: 0 = NULL in DB). Agents should pass their actual PID to enable crash detection. Range: 0-4194304 |
 
 **Output:**
 ```json
@@ -488,7 +488,7 @@ solo worktree cleanup T-142    # Clean worktree for specific task
 solo worktree cleanup --all    # Clean all, including completed tasks
 ```
 
-**Safety:** Only `inactive` or `cleaned_up` status worktrees are eligible. Active worktrees are never deleted by this command.
+**Safety:** Only worktrees with `active` or `cleanup_pending` status are eligible. The command removes the git worktree from disk and deletes the database record.
 
 ---
 
@@ -530,8 +530,9 @@ Note: This also runs automatically at the start of every CLI invocation.
 | `TASK_NOT_FOUND` | No task with the given ID exists |
 | `SESSION_NOT_FOUND` | No session with the given ID exists |
 | `WORKTREE_ERROR` | Git worktree operation failed |
+| `WORKTREE_EXISTS` | A worktree already exists for this task |
 | `OCC_CONFLICT` | Optimistic concurrency conflict; retry the operation |
 | `ALREADY_INITIALIZED` | `solo init` run on already-initialized repo |
 | `DEPENDENCY_UNMET` | Task has unmet dependencies |
-| `INVALID_ARGUMENT` | A required flag was missing or invalid |
+| `INVALID_ARGUMENT` | A required flag was missing or invalid (e.g., --pid out of range) |
 | `DB_ERROR` | Internal database error |

@@ -338,7 +338,7 @@ func runSession(app *solo.App, args []string) error {
 		taskID := args[1]
 		worker := ""
 		ttl := 0
-		pid := os.Getpid()
+		pid := 0
 		for i := 2; i < len(args); i++ {
 			switch args[i] {
 			case "--worker":
