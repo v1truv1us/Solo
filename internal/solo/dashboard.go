@@ -1,12 +1,18 @@
 package solo
 
 import (
+	"context"
+	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -213,7 +219,30 @@ func (a *App) PrometheusMetrics() (string, error) {
 	return b.String(), nil
 }
 
-func (a *App) DashboardHandler() http.Handler {
+func generateAPIKey() string {
+	b := make([]byte, 32)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+func loadOrInitAPIKey(db *sql.DB) (string, error) {
+	var key string
+	err := db.QueryRow(`SELECT value FROM config WHERE key='dashboard_api_key'`).Scan(&key)
+	if err == nil && key != "" {
+		return key, nil
+	}
+	key = generateAPIKey()
+	ctx := context.Background()
+	if err := withImmediateTx(ctx, db, func(conn *sql.Conn) error {
+		_, err := conn.ExecContext(ctx, `INSERT OR REPLACE INTO config (key, value) VALUES ('dashboard_api_key', ?)`, key)
+		return err
+	}); err != nil {
+		return "", err
+	}
+	return key, nil
+}
+
+func (a *App) DashboardHandler(apiKey string) http.Handler {
 	mux := http.NewServeMux()
 	page := template.Must(template.New("dashboard").Parse(dashboardHTML))
 
@@ -227,6 +256,10 @@ func (a *App) DashboardHandler() http.Handler {
 	})
 
 	mux.HandleFunc("/api/dashboard", func(w http.ResponseWriter, r *http.Request) {
+		if apiKey != "" && !checkAPIKey(r, apiKey) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 		snapshot, err := a.DashboardSnapshot(12, 12)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -237,6 +270,10 @@ func (a *App) DashboardHandler() http.Handler {
 	})
 
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		if apiKey != "" && !checkAPIKey(r, apiKey) {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 		payload, err := a.PrometheusMetrics()
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -249,11 +286,54 @@ func (a *App) DashboardHandler() http.Handler {
 	return mux
 }
 
-func (a *App) RunDashboard(addr string) error {
+func checkAPIKey(r *http.Request, apiKey string) bool {
+	auth := r.Header.Get("Authorization")
+	if strings.HasPrefix(auth, "Bearer ") {
+		token := strings.TrimPrefix(auth, "Bearer ")
+		return subtle.ConstantTimeCompare([]byte(token), []byte(apiKey)) == 1
+	}
+	q := r.URL.Query().Get("api_key")
+	if q != "" {
+		return subtle.ConstantTimeCompare([]byte(q), []byte(apiKey)) == 1
+	}
+	return false
+}
+
+func defaultLocalAddr(addr string) string {
 	if strings.TrimSpace(addr) == "" {
 		addr = ":8081"
 	}
-	return http.ListenAndServe(addr, a.DashboardHandler())
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" || host == "0.0.0.0" {
+		return "127.0.0.1" + addr[len(host):]
+	}
+	return addr
+}
+
+func (a *App) RunDashboard(addr string) error {
+	addr = defaultLocalAddr(addr)
+	root, err := discoverRepoRoot(".")
+	if err != nil {
+		return err
+	}
+	dbPath := filepath.Join(root, ".solo", "solo.db")
+	db, err := openDB(dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := applySchema(db); err != nil {
+		return err
+	}
+	apiKey, err := loadOrInitAPIKey(db)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "Solo dashboard: http://%s (api_key: %s)\n", addr, apiKey)
+	return http.ListenAndServe(addr, a.DashboardHandler(apiKey))
 }
 
 func (a *App) withDBMetrics(op func(*sql.DB) (MetricsSnapshot, error)) (MetricsSnapshot, error) {

@@ -49,7 +49,8 @@ func applySchema(db *sql.DB) error {
 			released_at TEXT,
 			release_reason TEXT CHECK (release_reason IN ('completed', 'expired', 'handoff', 'manual', 'recovered', NULL)),
 			worktree_path TEXT,
-			machine_id TEXT NOT NULL DEFAULT 'default'
+			machine_id TEXT NOT NULL DEFAULT 'default',
+			token TEXT
 		)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_reservations_active_task ON reservations(task_id) WHERE active = 1`,
 		`CREATE INDEX IF NOT EXISTS idx_reservations_expires ON reservations(expires_at) WHERE active = 1`,

@@ -106,7 +106,13 @@ func run(app *solo.App, args []string) error {
 			if len(args) < 3 {
 				return solo.ErrInvalidArgument("missing task id")
 			}
-			resp, err := app.RenewReservation(args[2])
+			token := ""
+			for i := 3; i < len(args); i++ {
+				if args[i] == "--token" {
+					token = val(args, &i)
+				}
+			}
+			resp, err := app.RenewReservation(args[2], token)
 			if err != nil {
 				return err
 			}

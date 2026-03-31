@@ -4,14 +4,25 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"os"
 	"path/filepath"
 	"strings"
 )
 
+func validateTaskID(id string) error {
+	for _, r := range id {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return ErrInvalidArgument("task id contains invalid characters")
+		}
+	}
+	return nil
+}
+
 func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any, error) {
 	if strings.TrimSpace(worker) == "" {
 		return nil, ErrInvalidArgument("--worker is required")
+	}
+	if err := validateTaskID(taskID); err != nil {
+		return nil, err
 	}
 	return a.withDB(func(db *sql.DB) (map[string]any, error) {
 		ctx := context.Background()
@@ -31,10 +42,15 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 			return nil, err
 		}
 		worktreePath := filepath.Join(repoRoot, worktreeDir, taskID)
+		cleanWorktree, err := filepath.Rel(repoRoot, worktreePath)
+		if err != nil || strings.HasPrefix(cleanWorktree, "..") {
+			return nil, ErrInvalidArgument("worktree path escapes repository root")
+		}
 		branch := "solo/" + machineID + "/" + taskID
 
 		resID := randomID()
 		sessionID := randomID()
+		reservationToken := randomID()
 		var taskVersion int
 		var inProgressVersion int
 		var expiresAt string
@@ -63,8 +79,8 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 			if lockedWorker.Valid && strings.TrimSpace(lockedWorker.String) != "" && lockedWorker.String != worker {
 				return errHandoffLocked()
 			}
-			if _, err := conn.ExecContext(ctx, `INSERT INTO reservations (id, task_id, worker_id, expires_at, ttl_sec, machine_id)
-				VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now', ?), ?, ?)`, resID, taskID, worker, sqlTimeAddSeconds(ttl), ttl, machineID); err != nil {
+			if _, err := conn.ExecContext(ctx, `INSERT INTO reservations (id, task_id, worker_id, expires_at, ttl_sec, machine_id, token)
+				VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ','now', ?), ?, ?, ?)`, resID, taskID, worker, sqlTimeAddSeconds(ttl), ttl, machineID, reservationToken); err != nil {
 				if strings.Contains(strings.ToLower(err.Error()), "unique") {
 					return errTaskLocked(taskID)
 				}
@@ -135,12 +151,13 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 		}
 		relPath := relOrSelf(repoRoot, worktreePath)
 		return map[string]any{
-			"session_id":     sessionID,
-			"reservation_id": resID,
-			"worktree_path":  relPath,
-			"branch":         branch,
-			"expires_at":     expiresAt,
-			"context":        ctxBundle,
+			"session_id":        sessionID,
+			"reservation_id":    resID,
+			"reservation_token": reservationToken,
+			"worktree_path":     relPath,
+			"branch":            branch,
+			"expires_at":        expiresAt,
+			"context":           ctxBundle,
 		}, nil
 	})
 }
@@ -272,22 +289,22 @@ func (a *App) ListSessions(taskID, worker string, active bool) (map[string]any, 
 	})
 }
 
-func (a *App) RenewReservation(taskID string) (map[string]any, error) {
+func (a *App) RenewReservation(taskID string, token string) (map[string]any, error) {
 	return a.withDB(func(db *sql.DB) (map[string]any, error) {
 		ctx := context.Background()
 		defaultTTL := configInt(db, "default_ttl_sec", 3600)
 		var rid string
 		var expires string
 		if err := withImmediateTx(ctx, db, func(conn *sql.Conn) error {
-			var ownerPID int
-			if err := conn.QueryRowContext(ctx, `SELECT r.id, COALESCE(s.agent_pid, 0) FROM reservations r LEFT JOIN sessions s ON s.reservation_id=r.id AND s.ended_at IS NULL WHERE r.task_id=? AND r.active=1`, taskID).Scan(&rid, &ownerPID); err != nil {
+			var storedToken sql.NullString
+			if err := conn.QueryRowContext(ctx, `SELECT r.id, r.token FROM reservations r WHERE r.task_id=? AND r.active=1`, taskID).Scan(&rid, &storedToken); err != nil {
 				if err == sql.ErrNoRows {
 					return errTaskLocked(taskID)
 				}
 				return err
 			}
-			// Assumption per spec ambiguity: "current holder" is identified by active session PID.
-			if ownerPID > 0 && ownerPID != os.Getpid() {
+			if storedToken.Valid && storedToken.String != "" && token != "" && storedToken.String != token {
+				_ = writeAudit(ctx, conn, taskID, "reservation.renew_denied", "agent", "cli", nil, map[string]any{"reason": "token_mismatch"})
 				return errTaskLocked(taskID)
 			}
 			if _, err := conn.ExecContext(ctx, `UPDATE reservations SET expires_at=strftime('%Y-%m-%dT%H:%M:%fZ','now', ?) WHERE id=? AND active=1`, sqlTimeAddSeconds(defaultTTL), rid); err != nil {
@@ -296,7 +313,7 @@ func (a *App) RenewReservation(taskID string) (map[string]any, error) {
 			if err := conn.QueryRowContext(ctx, `SELECT expires_at FROM reservations WHERE id=?`, rid).Scan(&expires); err != nil {
 				return err
 			}
-			return nil
+			return writeAudit(ctx, conn, taskID, "reservation.renewed", "agent", "cli", nil, map[string]any{"reservation_id": rid})
 		}); err != nil {
 			return nil, err
 		}

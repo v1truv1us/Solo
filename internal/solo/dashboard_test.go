@@ -68,7 +68,7 @@ func TestDashboardHandlers(t *testing.T) {
 			t.Fatalf("create task: %v", err)
 		}
 
-		h := app.DashboardHandler()
+		h := app.DashboardHandler("")
 
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		rr := httptest.NewRecorder()
