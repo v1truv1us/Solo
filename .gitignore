@@ -1,2 +1,4 @@
 .solo/
 solo
+coverage.out
+dist/
