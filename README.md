@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Version](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://golang.org/)
-[![Status: Pre-release](https://img.shields.io/badge/Status-Pre--release-orange)]()
+[![Release](https://img.shields.io/badge/Release-v0.1.0-blue)](https://github.com/v1truv1us/Solo/releases)
 
 ---
 
@@ -162,6 +162,33 @@ Solo is intentionally minimal.
 
 ## Installation
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew install v1truv1us/tap/solo
+```
+
+### Direct Download
+
+```bash
+# Linux x86_64
+curl -L https://github.com/v1truv1us/Solo/releases/latest/download/solo_Linux_x86_64.tar.gz | tar xz
+
+# Linux ARM64
+curl -L https://github.com/v1truv1us/Solo/releases/latest/download/solo_Linux_arm64.tar.gz | tar xz
+
+# macOS Intel
+curl -L https://github.com/v1truv1us/Solo/releases/latest/download/solo_Darwin_x86_64.tar.gz | tar xz
+
+# macOS Apple Silicon
+curl -L https://github.com/v1truv1us/Solo/releases/latest/download/solo_Darwin_arm64.tar.gz | tar xz
+
+# Windows
+curl -L https://github.com/v1truv1us/Solo/releases/latest/download/solo_Windows_x86_64.zip -o solo.zip
+```
+
+### Build from Source
+
 ```bash
 git clone https://github.com/v1truv1us/Solo.git
 cd Solo
@@ -214,13 +241,13 @@ solo dashboard --addr :8081
 
 | Document | Description |
 |---|---|
-| [PRD](PRD%20(1).md) | Product requirements and user stories |
+| [PRD](PRD.md) | Product requirements and user stories |
 | [Architecture](ARCHITECTURE.md) | System design and component overview |
-| [Design Principles](DESIGN_PRINCIPLES%20(1).md) | Philosophy and constraints |
-| [Data Model](DATA_MODEL%20(1).md) | Core entities and schema |
-| [CLI Reference](CLI_REFERENCE%20(1).md) | Full command reference |
+| [Design Principles](DESIGN_PRINCIPLES.md) | Philosophy and constraints |
+| [Data Model](DATA_MODEL.md) | Core entities and schema |
+| [CLI Reference](CLI_REFERENCE.md) | Full command reference |
 | [Agent Integration](AGENT_INTEGRATION.md) | How agents should use Solo |
-| [Failure & Recovery](FAILURE_AND_RECOVERY%20(1).md) | Crash handling and recovery |
+| [Failure & Recovery](FAILURE_AND_RECOVERY.md) | Crash handling and recovery |
 | [Security Model](SECURITY_MODEL.md) | Trust boundaries and threat model |
 | [Testing Strategy](TESTING_STRATEGY.md) | Test categories and coverage |
 | [Roadmap](ROADMAP.md) | Planned and future work |
