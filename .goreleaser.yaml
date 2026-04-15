@@ -74,3 +74,18 @@ brews:
     test: |
       system "#{bin}/solo", "--help"
       system "#{bin}/solo", "health", "--json"
+
+nfpms:
+  - package_name: solo
+    homepage: https://github.com/v1truv1us/Solo
+    description: Local orchestration layer for coordinating multiple coding agents
+    license: MIT
+    maintainer: John Ferguson <john@v1truv1us.com>
+    vendor: v1truv1us
+    formats:
+      - deb
+    section: utils
+    priority: optional
+    archs:
+      - amd64
+      - arm64
