@@ -1,0 +1,76 @@
+# GoReleaser v2 configuration
+version: 2
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    main: ./cmd/solo
+    binary: solo
+    goos:
+      - linux
+      - windows
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    tags:
+      - fts5
+    ldflags:
+      - -s -w
+      - -X solo/internal/version.Version={{.Version}}
+    mod_timestamp: '{{ .CommitTimestamp }}'
+
+archives:
+  - formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- title .Os }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "386" }}i386
+      {{- else }}{{ .Arch }}{{ end }}
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+brews:
+  - name: solo
+    homepage: https://github.com/v1truv1us/Solo
+    description: "Local orchestration layer for coordinating multiple coding agents"
+    license: MIT
+    repository:
+      owner: v1truv1us
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_PAT }}"
+    directory: Formula
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    install: |
+      bin.install "solo"
+    caveats: |
+      To get started with Solo:
+
+        1. Initialize a repository:  solo init
+        2. Create a task:            solo task create --title "My task" --priority high
+        3. Start a session:          solo session start T-1 --worker claude-code
+        4. Complete or hand off:     solo session end T-1 --result completed
+
+      For more information, visit: https://github.com/v1truv1us/Solo
+    test: |
+      system "#{bin}/solo", "--help"
+      system "#{bin}/solo", "health", "--json"
