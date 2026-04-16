@@ -26,7 +26,12 @@ func main() {
 
 func run(app *solo.App, args []string) error {
 	if len(args) == 0 {
-		return solo.ErrInvalidArgument("missing command")
+		return solo.ErrInvalidArgument("missing command (use --help or run 'solo --help' for usage)")
+	}
+
+	// Handle help flag globally
+	if args[0] == "--help" || args[0] == "-h" {
+		args[0] = "help"
 	}
 	jsonOut := hasFlag(args, "--json")
 	_ = jsonOut
@@ -134,8 +139,10 @@ func run(app *solo.App, args []string) error {
 			return writeOK(resp)
 		}
 		return solo.ErrInvalidArgument("expected --all")
+	case "help":
+		return runHelp(app, args[1:])
 	default:
-		return solo.ErrInvalidArgument("unknown command")
+		return solo.ErrInvalidArgument("unknown command (use 'solo help' for available commands)")
 	}
 }
 
@@ -618,4 +625,25 @@ func writeJSON(v any) error {
 		return fmt.Errorf("encode response: %w", err)
 	}
 	return nil
+}
+
+func runHelp(app *solo.App, args []string) error {
+	resp := map[string]any{
+		"commands": []map[string]string{
+			{"command": "init", "description": "Initialize the repository"},
+			{"command": "health", "description": "Check service health"},
+			{"command": "task", "description": "Task management (create, list, show, update, ready, deps, tree)"},
+			{"command": "session", "description": "Session management (start, end, list)"},
+			{"command": "handoff", "description": "Handoff management (create, list, show)"},
+			{"command": "worktree", "description": "Worktree management (list, inspect, cleanup)"},
+			{"command": "audit", "description": "Audit log queries (list, show)"},
+			{"command": "recover", "description": "Crash recovery (--all)"},
+			{"command": "dashboard", "description": "Start web dashboard (--addr)"},
+			{"command": "search", "description": "Search tasks (query, --status, --limit)"},
+			{"command": "help", "description": "Show this help message"},
+		},
+		"use_JSON_flag": "--json for machine-readable output",
+		"example":       "solo --help",
+	}
+	return writeOK(resp)
 }
