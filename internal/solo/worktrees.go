@@ -99,10 +99,10 @@ func (a *App) CleanupWorktrees(taskID string, force bool) (map[string]any, error
 			}
 			_ = deleteBranch(repoRoot, branch, force)
 			ctx := context.Background()
-			if err := withImmediateTx(ctx, db, func(conn *sql.Conn) error {
-				_, err := conn.ExecContext(ctx, `DELETE FROM worktrees WHERE path=? AND status IN ('active','cleanup_pending')`, path)
-				return err
-			}); err != nil {
+		if err := withImmediateTx(ctx, db, func(conn *sql.Conn) error {
+			_, err := conn.ExecContext(ctx, `DELETE FROM worktrees WHERE path=? AND status IN ('active','cleanup_pending')`, path)
+			return err
+		}); err != nil {
 				skipped = append(skipped, map[string]any{"task_id": tID, "path": path, "reason": err.Error()})
 				continue
 			}
