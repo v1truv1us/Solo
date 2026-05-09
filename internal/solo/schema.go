@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 func applySchema(db *sql.DB) error {
@@ -162,6 +163,9 @@ func applySchema(db *sql.DB) error {
 				return fmt.Errorf("schema statement failed: %w", err)
 			}
 		}
+		if err := migrateLegacySchema(ctx, conn); err != nil {
+			return fmt.Errorf("schema migration failed: %w", err)
+		}
 		_, _ = conn.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version (version, description) VALUES (1, 'Solo v13 initial schema')`)
 		_, _ = conn.ExecContext(ctx, `UPDATE tasks SET status='draft' WHERE status IN ('open','triaged')`)
 		_, _ = conn.ExecContext(ctx, `UPDATE tasks SET status='active' WHERE status IN ('in_progress','in_review')`)
@@ -170,8 +174,110 @@ func applySchema(db *sql.DB) error {
 		_, _ = conn.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version (version, description) VALUES (2, 'Canonical task lifecycle + priority semantics')`)
 		_, _ = conn.ExecContext(ctx, `DELETE FROM worktrees WHERE status='cleaned'`)
 		_, _ = conn.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version (version, description) VALUES (3, 'Remove stale cleaned worktree rows')`)
+		// Migration 4: add start/end commit SHA columns to sessions
+		var colCount int
+		_ = conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name='start_commit_sha'`).Scan(&colCount)
+		if colCount == 0 {
+			_, _ = conn.ExecContext(ctx, `ALTER TABLE sessions ADD COLUMN start_commit_sha TEXT`)
+			_, _ = conn.ExecContext(ctx, `ALTER TABLE sessions ADD COLUMN end_commit_sha TEXT`)
+		}
+		_, _ = conn.ExecContext(ctx, `INSERT OR IGNORE INTO schema_version (version, description) VALUES (4, 'Add start/end commit SHA to sessions')`)
 		return nil
 	})
+}
+
+func migrateLegacySchema(ctx context.Context, conn *sql.Conn) error {
+	if err := ensureReservationsToken(ctx, conn); err != nil {
+		return err
+	}
+	needsWorktreeMigration, err := legacyWorktreesTable(ctx, conn)
+	if err != nil {
+		return err
+	}
+	if !needsWorktreeMigration {
+		return nil
+	}
+	if _, err := conn.ExecContext(ctx, `DROP TABLE IF EXISTS worktrees__migrated`); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `CREATE TABLE worktrees__migrated (
+		path TEXT PRIMARY KEY,
+		task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE RESTRICT,
+		branch_name TEXT NOT NULL,
+		base_ref TEXT NOT NULL DEFAULT 'origin/main',
+		base_commit_sha TEXT,
+		status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'cleanup_pending')),
+		disk_usage_bytes INTEGER,
+		created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+	)`); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `INSERT INTO worktrees__migrated (path, task_id, branch_name, base_ref, base_commit_sha, status, disk_usage_bytes, created_at)
+			SELECT path, task_id, branch_name, COALESCE(base_ref, 'origin/main'), base_commit_sha, status, disk_usage_bytes, created_at
+			FROM worktrees
+			WHERE status IN ('active', 'cleanup_pending')`); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `DROP TABLE worktrees`); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `ALTER TABLE worktrees__migrated RENAME TO worktrees`); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_worktrees_task ON worktrees(task_id)`); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_worktrees_status ON worktrees(status)`); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureReservationsToken(ctx context.Context, conn *sql.Conn) error {
+	hasToken, err := tableHasColumn(ctx, conn, "reservations", "token")
+	if err != nil || hasToken {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, `ALTER TABLE reservations ADD COLUMN token TEXT`)
+	return err
+}
+
+func legacyWorktreesTable(ctx context.Context, conn *sql.Conn) (bool, error) {
+	hasCleanedAt, err := tableHasColumn(ctx, conn, "worktrees", "cleaned_at")
+	if err != nil || hasCleanedAt {
+		return hasCleanedAt, err
+	}
+	var sqlDef string
+	if err := conn.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name='worktrees'`).Scan(&sqlDef); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	return strings.Contains(strings.ToLower(sqlDef), "'cleaned'"), nil
+}
+
+func tableHasColumn(ctx context.Context, conn *sql.Conn, tableName, columnName string) (bool, error) {
+	rows, err := conn.QueryContext(ctx, fmt.Sprintf("PRAGMA table_info(%s)", tableName))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name string
+		var colType sql.NullString
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == columnName {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func setDefaultConfig(db *sql.DB, machineID string) error {

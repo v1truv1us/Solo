@@ -14,14 +14,20 @@ import (
 func main() {
 	app := solo.NewApp()
 	if err := run(app, os.Args[1:]); err != nil {
-		var se *solo.Error
-		if errors.As(err, &se) {
-			_ = writeJSON(map[string]any{"ok": false, "error": se})
-			os.Exit(1)
-		}
-		_ = writeJSON(map[string]any{"ok": false, "error": solo.NewInternalError(err)})
+		writeErrorEnvelope(err)
 		os.Exit(1)
 	}
+}
+
+// writeErrorEnvelope writes the standardized {ok:false,error:...} envelope to stdout.
+// Extracted from main so tests can reuse the same logic.
+func writeErrorEnvelope(err error) {
+	var se *solo.Error
+	if errors.As(err, &se) {
+		_ = writeJSON(map[string]any{"ok": false, "error": se})
+		return
+	}
+	_ = writeJSON(map[string]any{"ok": false, "error": solo.NewInternalError(err)})
 }
 
 func run(app *solo.App, args []string) error {
@@ -394,6 +400,7 @@ func runSession(app *solo.App, args []string) error {
 		taskID := ""
 		worker := ""
 		active := false
+		verbose := false
 		for i := 1; i < len(args); i++ {
 			switch args[i] {
 			case "--task":
@@ -402,9 +409,11 @@ func runSession(app *solo.App, args []string) error {
 				worker = val(args, &i)
 			case "--active":
 				active = true
+			case "--verbose":
+				verbose = true
 			}
 		}
-		resp, err := app.ListSessions(taskID, worker, active)
+		resp, err := app.ListSessions(taskID, worker, active, verbose)
 		if err != nil {
 			return err
 		}

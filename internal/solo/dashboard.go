@@ -123,7 +123,7 @@ func (a *App) DashboardSnapshot(taskLimit, sessionLimit int) (map[string]any, er
 	if recentTasks == nil {
 		recentTasks = []map[string]any{}
 	}
-	recentSessionsResp, err := a.ListSessions("", "", false)
+	recentSessionsResp, err := a.ListSessions("", "", false, false)
 	if err != nil {
 		return nil, err
 	}

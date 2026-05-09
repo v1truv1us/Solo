@@ -3,6 +3,7 @@ package solo
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,7 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 		resID := randomID()
 		sessionID := randomID()
 		reservationToken := randomID()
+		startCommitSHA := getRefSHA(repoRoot, "HEAD")
 		var taskVersion int
 		var inProgressVersion int
 		var expiresAt string
@@ -97,7 +99,7 @@ func (a *App) StartSession(taskID, worker string, ttl, pid int) (map[string]any,
 			if pid > 0 {
 				pidVal = pid
 			}
-			if _, err := conn.ExecContext(ctx, `INSERT INTO sessions (id, task_id, reservation_id, worker_id, agent_pid) VALUES (?, ?, ?, ?, ?)`, sessionID, taskID, resID, worker, pidVal); err != nil {
+			if _, err := conn.ExecContext(ctx, `INSERT INTO sessions (id, task_id, reservation_id, worker_id, agent_pid, start_commit_sha) VALUES (?, ?, ?, ?, ?, ?)`, sessionID, taskID, resID, worker, pidVal, startCommitSHA); err != nil {
 				return err
 			}
 			baseCommitSHA := getRefSHA(repoRoot, baseRef)
@@ -196,6 +198,10 @@ func (a *App) EndSession(taskID, result, notes string, commits, files []string, 
 		var currentVersion int
 		taskStatus := "active"
 		endedAt := ""
+		// Note: discoverRepoRoot failure is tolerated — end_commit_sha will be empty,
+		// which correctly represents "commit SHA unavailable outside a repo context".
+		repoRoot, _ := discoverRepoRoot(".")
+		endCommitSHA := getRefSHA(repoRoot, "HEAD")
 		if err := withImmediateTx(ctx, db, func(conn *sql.Conn) error {
 			if err := conn.QueryRowContext(ctx, `SELECT s.id, s.reservation_id, t.version FROM sessions s JOIN tasks t ON t.id=s.task_id WHERE s.task_id=? AND s.ended_at IS NULL`, taskID).Scan(&sessionID, &reservationID, &currentVersion); err != nil {
 				if err == sql.ErrNoRows {
@@ -203,7 +209,7 @@ func (a *App) EndSession(taskID, result, notes string, commits, files []string, 
 				}
 				return err
 			}
-			res, err := conn.ExecContext(ctx, `UPDATE sessions SET ended_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), result=?, notes=?, commits=?, files_changed=? WHERE id=? AND ended_at IS NULL`, result, notes, mustJSON(decodeCommitShas(commits)), mustJSON(files), sessionID)
+			res, err := conn.ExecContext(ctx, `UPDATE sessions SET ended_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'), result=?, notes=?, commits=?, files_changed=?, end_commit_sha=? WHERE id=? AND ended_at IS NULL`, result, notes, mustJSON(decodeCommitShas(commits)), mustJSON(files), endCommitSHA, sessionID)
 			if err != nil {
 				return err
 			}
@@ -251,13 +257,76 @@ func (a *App) EndSession(taskID, result, notes string, commits, files []string, 
 		}); err != nil {
 			return nil, err
 		}
-		return map[string]any{"session_id": sessionID, "task_id": taskID, "result": result, "task_status": taskStatus, "ended_at": endedAt}, nil
+
+		// Aggregate files_changed from all sessions into the task's affected_files
+		aggregateFilesToTask(db, taskID, files)
+
+		return map[string]any{"session_id": sessionID, "task_id": taskID, "result": result, "task_status": taskStatus, "ended_at": endedAt, "end_commit_sha": endCommitSHA}, nil
 	})
 }
 
-func (a *App) ListSessions(taskID, worker string, active bool) (map[string]any, error) {
+// aggregateFilesToTask merges new files from the current session into the task's
+// affected_files, deduplicating across all sessions.
+//
+// This is intentionally best-effort and runs outside a transaction:
+// it reads the task's current affected_files, merges in files from all completed
+// sessions plus the current session's new files, and writes back. Under concurrent
+// access the last writer wins, which is acceptable because file lists are append-only
+// and deduplicated. Errors are silently ignored to avoid failing the session-end flow.
+func aggregateFilesToTask(db *sql.DB, taskID string, newFiles []string) {
+	var existingJSON string
+	if err := db.QueryRow(`SELECT affected_files FROM tasks WHERE id=?`, taskID).Scan(&existingJSON); err != nil {
+		return
+	}
+	var existing []string
+	if err := json.Unmarshal([]byte(existingJSON), &existing); err != nil {
+		existing = nil
+	}
+	seen := map[string]bool{}
+	for _, f := range existing {
+		seen[f] = true
+	}
+	for _, f := range newFiles {
+		if !seen[f] {
+			existing = append(existing, f)
+			seen[f] = true
+		}
+	}
+	// Also pull files from all completed sessions
+	rows, err := db.Query(`SELECT files_changed FROM sessions WHERE task_id=? AND ended_at IS NOT NULL`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var sessionFilesJSON string
+			if err := rows.Scan(&sessionFilesJSON); err != nil {
+				continue
+			}
+			var sessionFiles []string
+			if err := json.Unmarshal([]byte(sessionFilesJSON), &sessionFiles); err != nil {
+				continue
+			}
+			for _, f := range sessionFiles {
+				if !seen[f] {
+					existing = append(existing, f)
+					seen[f] = true
+				}
+			}
+		}
+	}
+	merged, err := json.Marshal(existing)
+	if err != nil {
+		return
+	}
+	_, _ = db.Exec(`UPDATE tasks SET affected_files=? WHERE id=?`, string(merged), taskID)
+}
+
+func (a *App) ListSessions(taskID, worker string, active, verbose bool) (map[string]any, error) {
 	return a.withDB(func(db *sql.DB) (map[string]any, error) {
-		query := `SELECT id, task_id, worker_id, started_at, ended_at, result FROM sessions WHERE 1=1`
+		query := `SELECT id, task_id, worker_id, started_at, ended_at, result`
+		if verbose {
+			query += `, start_commit_sha, end_commit_sha, commits, files_changed`
+		}
+		query += ` FROM sessions WHERE 1=1`
 		args := []any{}
 		if taskID != "" {
 			query += ` AND task_id=?`
@@ -280,8 +349,34 @@ func (a *App) ListSessions(taskID, worker string, active bool) (map[string]any, 
 		for rows.Next() {
 			var id, tID, w, started string
 			var ended, result sql.NullString
-			if err := rows.Scan(&id, &tID, &w, &started, &ended, &result); err != nil {
-				return nil, err
+			session := map[string]any{}
+			if !verbose {
+				if err := rows.Scan(&id, &tID, &w, &started, &ended, &result); err != nil {
+					return nil, err
+				}
+			} else {
+				var startSHA, endSHA, commitsJSON, filesJSON sql.NullString
+				if err := rows.Scan(&id, &tID, &w, &started, &ended, &result, &startSHA, &endSHA, &commitsJSON, &filesJSON); err != nil {
+					return nil, err
+				}
+				if startSHA.Valid && startSHA.String != "" {
+					session["start_commit_sha"] = startSHA.String
+				}
+				if endSHA.Valid && endSHA.String != "" {
+					session["end_commit_sha"] = endSHA.String
+				}
+				if commitsJSON.Valid && commitsJSON.String != "" {
+					var c []any
+					if err := json.Unmarshal([]byte(commitsJSON.String), &c); err == nil {
+						session["commits"] = c
+					}
+				}
+				if filesJSON.Valid && filesJSON.String != "" {
+					var f []string
+					if err := json.Unmarshal([]byte(filesJSON.String), &f); err == nil {
+						session["files_changed"] = f
+					}
+				}
 			}
 			var endedVal any
 			var resVal any
@@ -291,10 +386,24 @@ func (a *App) ListSessions(taskID, worker string, active bool) (map[string]any, 
 			if result.Valid {
 				resVal = result.String
 			}
-			sessions = append(sessions, map[string]any{"id": id, "task_id": tID, "worker_id": w, "started_at": started, "ended_at": endedVal, "result": resVal})
+			session["id"] = id
+			session["task_id"] = tID
+			session["worker_id"] = w
+			session["started_at"] = started
+			session["ended_at"] = endedVal
+			session["result"] = resVal
+			sessions = append(sessions, session)
 		}
 		return map[string]any{"sessions": sessions}, nil
 	})
+}
+
+func relOrSelf(repoRoot, path string) string {
+	rel, err := filepath.Rel(repoRoot, path)
+	if err != nil {
+		return path
+	}
+	return rel
 }
 
 func (a *App) RenewReservation(taskID string, token string) (map[string]any, error) {
@@ -328,12 +437,4 @@ func (a *App) RenewReservation(taskID string, token string) (map[string]any, err
 		remaining := defaultTTL
 		return map[string]any{"reservation": map[string]any{"id": rid, "task_id": taskID, "new_expires_at": expires, "remaining_sec": remaining}}, nil
 	})
-}
-
-func relOrSelf(repoRoot, path string) string {
-	rel, err := filepath.Rel(repoRoot, path)
-	if err != nil {
-		return path
-	}
-	return rel
 }

@@ -1,4 +1,36 @@
+# FleetTools
+.fleet/
+.flightline/
+*.log
+
+# Dependencies
+node_modules/
+bun.lockb
+package-lock.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Solo local state
 .solo/
-solo
+
+# Build artifacts
+/solo
 coverage.out
-dist/
+false
+
+# Pi agent state
+.pi/
+
+# Local tooling
+fleet.yaml
+bun.lock
+package.json
+package-lock.json
