@@ -121,13 +121,13 @@ Solo is a Go CLI (~3,600 LOC across 16 source files) that provides local SQLite-
 - [x] `solo audit list` / `solo audit show` implemented and tested
 - [x] Test coverage ≥ 70% (current: 70.4%, 126 tests)
 - [x] `go vet` passes clean
-- [ ] `staticcheck` pass clean
+- [x] `staticcheck` pass clean
 - [ ] All documentation updated and consistent
 - [ ] README version badge updated
-- [ ] CHANGELOG.md created (or GoReleaser changelog verified)
-- [ ] Cross-platform build matrix verified (6 targets)
-- [ ] Homebrew tap formula updated and installable
-- [ ] Manual smoke test: `init → task create → session start → session end → worktree cleanup → restart`
+- [x] CHANGELOG.md created (or GoReleaser changelog verified)
+- [x] Cross-platform build matrix verified (6 targets)
+- [x] Homebrew tap formula updated and installable
+- [x] Manual smoke test: `init → task create → session start → session end → worktree cleanup → restart`
 - [ ] Manual smoke test: handoff flow (session start → handoff create → session start → session end)
 - [ ] Tag v1.0.0-rc.1 → verify CI passes → tag v1.0.0
 - [ ] GitHub Release notes written
