@@ -19,14 +19,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Configure npm registry
-        run: npm config set registry https://registry.npmjs.org
-
-      - name: Debug npm auth
-        run: |
-          npm --version
-          npm whoami || echo "not authenticated (expected before publish)"
+          registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
         run: npm install
@@ -36,6 +29,6 @@ jobs:
         run: npm run typecheck
         working-directory: ./pi-extension
 
-      - name: Publish to npm
-        run: npm publish --provenance
+      - name: Publish to npm (OIDC provenance)
+        run: npm publish --provenance --access public
         working-directory: ./pi-extension
