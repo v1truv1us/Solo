@@ -39,6 +39,11 @@ jobs:
           npm whoami || true
         working-directory: ./pi-extension
 
+      - name: Check OIDC env vars
+        run: |
+          echo "ACTIONS_ID_TOKEN_REQUEST_URL: ${ACTIONS_ID_TOKEN_REQUEST_URL:+set}"
+          echo "ACTIONS_ID_TOKEN_REQUEST_TOKEN: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+set}"
+
       - name: Publish to npm
         run: npm publish --loglevel verbose
         working-directory: ./pi-extension
