@@ -21,12 +21,6 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Activate npm 11 (required for trusted publishing)
-        run: |
-          corepack enable
-          corepack prepare npm@11 --activate
-          npm --version
-
       - name: Install dependencies
         run: npm install
         working-directory: ./pi-extension
@@ -35,6 +29,6 @@ jobs:
         run: npm run typecheck
         working-directory: ./pi-extension
 
-      - name: Publish to npm
-        run: npm publish
+      - name: Publish to npm with npm 11 (trusted publishing requires 11.5.1+)
+        run: npx npm@11 publish
         working-directory: ./pi-extension
