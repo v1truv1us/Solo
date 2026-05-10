@@ -18,7 +18,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Install dependencies
@@ -29,6 +29,6 @@ jobs:
         run: npm run typecheck
         working-directory: ./pi-extension
 
-      - name: Publish to npm (test without provenance)
-        run: npm publish --access public
+      - name: Publish to npm
+        run: npm publish
         working-directory: ./pi-extension
