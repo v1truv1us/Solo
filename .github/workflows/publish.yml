@@ -32,6 +32,13 @@ jobs:
         run: npm run typecheck
         working-directory: ./pi-extension
 
+      - name: Debug npm version and auth
+        run: |
+          npm --version
+          npm config list
+          npm whoami || true
+        working-directory: ./pi-extension
+
       - name: Publish to npm
-        run: npm publish
+        run: npm publish --loglevel verbose
         working-directory: ./pi-extension
