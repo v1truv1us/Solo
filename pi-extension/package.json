@@ -1,0 +1,79 @@
+{
+  "name": "pi-solo",
+  "version": "0.1.1",
+  "type": "module",
+  "description": "Pi package for the Solo task tracker — tool, commands, auto-init, and TUI widget.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "solo",
+    "task-tracker"
+  ],
+  "publishConfig": {
+    "provenance": true
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/v1truv1us/Solo.git",
+    "directory": "pi-extension"
+  },
+  "homepage": "https://github.com/v1truv1us/Solo/tree/main/pi-extension",
+  "bugs": {
+    "url": "https://github.com/v1truv1us/Solo/issues"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "pack:check": "npm pack --dry-run",
+    "publish:check": "npm run typecheck && npm run pack:check",
+    "release": "GH_TOKEN=$(gh auth token) release-it"
+  },
+  "files": [
+    "src/index.ts",
+    "src/format.ts",
+    "src/error-log.ts",
+    "README.md",
+    "PUBLISHING.md"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@release-it/conventional-changelog": "^11.0.0",
+    "@types/node": "^24.0.0",
+    "release-it": "^20.0.1",
+    "typebox": "*",
+    "typescript": "^5.8.3"
+  },
+  "release-it": {
+    "git": {
+      "commitMessage": "chore: release v${version}",
+      "tagName": "v${version}"
+    },
+    "github": {
+      "release": true,
+      "releaseName": "v${version}",
+      "autoGenerate": true
+    },
+    "npm": {
+      "publish": false
+    },
+    "hooks": {
+      "before:init": "npm run typecheck"
+    },
+    "plugins": {
+      "@release-it/conventional-changelog": {
+        "preset": "conventionalcommits"
+      }
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}

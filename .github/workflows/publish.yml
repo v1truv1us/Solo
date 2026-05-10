@@ -1,0 +1,34 @@
+name: Publish to npm
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: npm install
+        working-directory: ./pi-extension
+
+      - name: Type check
+        run: npm run typecheck
+        working-directory: ./pi-extension
+
+      - name: Publish to npm
+        run: npm publish --provenance
+        working-directory: ./pi-extension
