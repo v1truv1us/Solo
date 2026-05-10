@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-import { formatSoloCliError, formatWidgetLines, resolveSoloExecutionCwd, shouldAutoInit } from "./format.js";
+import { formatSoloCliError, formatWidgetLines, getWidgetRefreshAt, resolveSoloExecutionCwd, shouldAutoInit } from "./format.js";
 
 const tempPaths: string[] = [];
 
@@ -55,33 +55,53 @@ describe("shouldAutoInit", () => {
 });
 
 describe("formatWidgetLines", () => {
-  test("renders checkbox-style task rows and marks completed tasks", () => {
+  const recentWindowMs = 10 * 60 * 1000;
+  const now = Date.parse("2026-05-10T14:00:00.000Z");
+
+  test("renders completed tasks when expanded", () => {
     const lines = formatWidgetLines([
       { id: "T-3", title: "In progress", status: "active" },
       { id: "T-2", title: "Ready to pick up", status: "ready" },
       { id: "T-1", title: "Already done", status: "completed" },
-    ], { issues: ["db_integrity_failed"] });
+    ], { issues: ["db_integrity_failed"] }, { expanded: true, now });
 
     assert.deepEqual(lines, [
-      "Solo: 1 active | 1 completed | 1 ready ⚠ 1 issue(s)",
+      "▾ Solo: 1 active | 1 completed | 1 ready ⚠ 1 issue(s)",
       "◐ T-3 In progress",
       "☑ T-1 Already done",
       "☐ T-2 Ready to pick up",
     ]);
   });
 
-  test("recently completed tasks float to top with ✅ icon", () => {
-    const justNow = new Date().toISOString();
-    const lines = formatWidgetLines([
-      { id: "T-1", title: "Just finished", status: "completed", updated_at: justNow },
-      { id: "T-2", title: "In progress", status: "active" },
-      { id: "T-3", title: "Ready to go", status: "ready" },
-    ]);
+  test("collapses stale completed tasks but keeps recent completions visible", () => {
+    const recentCompletedAt = new Date(now - 60_000).toISOString();
+    const staleCompletedAt = new Date(now - recentWindowMs - 60_000).toISOString();
 
-    // Recently completed should appear first with ✅
-    assert.equal(lines[1], "✅ T-1 Just finished");
-    // Active task next
-    assert.equal(lines[2], "◐ T-2 In progress");
+    const lines = formatWidgetLines([
+      { id: "T-4", title: "Freshly done", status: "completed", updated_at: recentCompletedAt },
+      { id: "T-3", title: "In progress", status: "active" },
+      { id: "T-2", title: "Ready to pick up", status: "ready" },
+      { id: "T-1", title: "Old finished", status: "completed", updated_at: staleCompletedAt },
+    ], undefined, { now });
+
+    assert.deepEqual(lines, [
+      "▸ Solo: 1 active | 2 completed | 1 ready",
+      "✅ T-4 Freshly done",
+      "◐ T-3 In progress",
+      "☐ T-2 Ready to pick up",
+      "… 1 completed task hidden — F8 to expand",
+    ]);
+  });
+
+  test("reports when a recent completion should refresh the widget", () => {
+    const recentCompletedAt = now - 5 * 60 * 1000;
+    const refreshAt = getWidgetRefreshAt([
+      { id: "T-1", title: "Just finished", status: "completed", updated_at: new Date(recentCompletedAt).toISOString() },
+      { id: "T-2", title: "Ready to go", status: "ready" },
+      { id: "T-3", title: "Old finished", status: "completed", updated_at: new Date(now - recentWindowMs - 60_000).toISOString() },
+    ], now);
+
+    assert.equal(refreshAt, recentCompletedAt + recentWindowMs);
   });
 });
 

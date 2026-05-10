@@ -21,9 +21,15 @@ export interface SoloExecutionCwd {
   hasSoloDb: boolean;
 }
 
+export interface WidgetFormatOptions {
+  expanded?: boolean;
+  now?: number;
+  maxVisible?: number;
+}
+
 const WIDGET_STATUS_ORDER = ["active", "completed", "ready", "draft", "blocked", "failed", "cancelled"] as const;
 
-// How long a completed task stays "recent" (floats to top) in milliseconds
+// How long a completed task stays visible in the collapsed widget view.
 const RECENTLY_COMPLETED_MS = 10 * 60 * 1000; // 10 minutes
 
 const WIDGET_STATUS_ICONS: Record<string, string> = {
@@ -204,37 +210,80 @@ export function shouldAutoInit(execCwd: SoloExecutionCwd): boolean {
   return execCwd.hasGitRepo && !execCwd.hasSoloDb;
 }
 
-function isRecentlyCompleted(task: Record<string, unknown>): boolean {
-	const status = String(task.status ?? "");
-	if (status !== "completed") return false;
-	const updated = task.updated_at ?? task.created_at;
-	if (typeof updated !== "string") return false;
-	const updatedTime = new Date(updated).getTime();
-	if (isNaN(updatedTime)) return false;
-	return Date.now() - updatedTime < RECENTLY_COMPLETED_MS;
+function getTaskTimestamp(task: Record<string, unknown>): number | undefined {
+  const value = task.updated_at ?? task.created_at;
+  if (typeof value !== "string") return undefined;
+  const timestamp = new Date(value).getTime();
+  return Number.isNaN(timestamp) ? undefined : timestamp;
 }
 
-function compareWidgetTasks(a: Record<string, unknown>, b: Record<string, unknown>): number {
-	const aRecent = isRecentlyCompleted(a);
-	const bRecent = isRecentlyCompleted(b);
-	// Recently completed tasks float to the very top
-	if (aRecent !== bRecent) return aRecent ? -1 : 1;
-
-	const aStatus = String(a.status ?? "unknown");
-	const bStatus = String(b.status ?? "unknown");
-	const aOrder = WIDGET_STATUS_ORDER.indexOf(aStatus as (typeof WIDGET_STATUS_ORDER)[number]);
-	const bOrder = WIDGET_STATUS_ORDER.indexOf(bStatus as (typeof WIDGET_STATUS_ORDER)[number]);
-	if (aOrder !== bOrder) return (aOrder === -1 ? 99 : aOrder) - (bOrder === -1 ? 99 : bOrder);
-
-	// Within the same status group, sort by updated_at descending (most recent first)
-	const aUpdated = String(a.updated_at ?? a.created_at ?? "");
-	const bUpdated = String(b.updated_at ?? b.created_at ?? "");
-	if (aUpdated !== bUpdated) return bUpdated.localeCompare(aUpdated);
-
-	return String(a.id ?? "").localeCompare(String(b.id ?? ""), undefined, { numeric: true });
+function isRecentlyCompleted(task: Record<string, unknown>, now: number): boolean {
+  if (String(task.status ?? "") !== "completed") return false;
+  const updatedTime = getTaskTimestamp(task);
+  return updatedTime !== undefined && now - updatedTime < RECENTLY_COMPLETED_MS;
 }
 
-export function formatWidgetLines(tasks: Record<string, unknown>[], health?: Record<string, unknown>, maxVisible = 5): string[] {
+function compareWidgetTasks(a: Record<string, unknown>, b: Record<string, unknown>, now: number): number {
+  const aRecent = isRecentlyCompleted(a, now);
+  const bRecent = isRecentlyCompleted(b, now);
+  // Recently completed tasks float to the very top.
+  if (aRecent !== bRecent) return aRecent ? -1 : 1;
+
+  const aStatus = String(a.status ?? "unknown");
+  const bStatus = String(b.status ?? "unknown");
+  const aOrder = WIDGET_STATUS_ORDER.indexOf(aStatus as (typeof WIDGET_STATUS_ORDER)[number]);
+  const bOrder = WIDGET_STATUS_ORDER.indexOf(bStatus as (typeof WIDGET_STATUS_ORDER)[number]);
+  if (aOrder !== bOrder) return (aOrder === -1 ? 99 : aOrder) - (bOrder === -1 ? 99 : bOrder);
+
+  // Within the same status group, sort by updated_at descending (most recent first).
+  const aUpdated = String(a.updated_at ?? a.created_at ?? "");
+  const bUpdated = String(b.updated_at ?? b.created_at ?? "");
+  if (aUpdated !== bUpdated) return bUpdated.localeCompare(aUpdated);
+
+  return String(a.id ?? "").localeCompare(String(b.id ?? ""), undefined, { numeric: true });
+}
+
+function buildHiddenWidgetSummary(hiddenOverflow: number, hiddenCompleted: number): string | undefined {
+  if (hiddenOverflow === 0 && hiddenCompleted === 0) return undefined;
+
+  const parts: string[] = [];
+  if (hiddenOverflow > 0) {
+    parts.push(`${hiddenOverflow} more ${hiddenOverflow === 1 ? "task" : "tasks"}`);
+  }
+  if (hiddenCompleted > 0) {
+    parts.push(`${hiddenCompleted} completed ${hiddenCompleted === 1 ? "task" : "tasks"}`);
+  }
+
+  return `… ${parts.join(" and ")} hidden — F8 to expand`;
+}
+
+export function getWidgetRefreshAt(tasks: Record<string, unknown>[], now = Date.now()): number | undefined {
+  let nextRefreshAt: number | undefined;
+
+  for (const task of tasks) {
+    if (String(task.status ?? "") !== "completed") continue;
+    const completedAt = getTaskTimestamp(task);
+    if (completedAt === undefined) continue;
+
+    const expiresAt = completedAt + RECENTLY_COMPLETED_MS;
+    if (expiresAt <= now) continue;
+    if (nextRefreshAt === undefined || expiresAt < nextRefreshAt) {
+      nextRefreshAt = expiresAt;
+    }
+  }
+
+  return nextRefreshAt;
+}
+
+export function formatWidgetLines(
+  tasks: Record<string, unknown>[],
+  health?: Record<string, unknown>,
+  options: WidgetFormatOptions = {},
+): string[] {
+  const expanded = options.expanded ?? false;
+  const now = options.now ?? Date.now();
+  const maxVisible = options.maxVisible ?? 5;
+
   const counts: Record<string, number> = {};
   for (const task of tasks) {
     const status = String(task.status ?? "unknown");
@@ -244,7 +293,7 @@ export function formatWidgetLines(tasks: Record<string, unknown>[], health?: Rec
   const headerParts = WIDGET_STATUS_ORDER
     .map((status) => (counts[status] ? `${counts[status]} ${status}` : null))
     .filter((part): part is string => part !== null);
-  let header = `Solo: ${headerParts.join(" | ") || "no tasks"}`;
+  let header = `${expanded ? "▾" : "▸"} Solo: ${headerParts.join(" | ") || "no tasks"}`;
 
   const issues = health?.issues as string[] | undefined;
   if (issues && issues.length > 0) {
@@ -252,10 +301,15 @@ export function formatWidgetLines(tasks: Record<string, unknown>[], health?: Rec
   }
 
   const lines = [header];
-  const visibleTasks = [...tasks].sort(compareWidgetTasks).slice(0, maxVisible);
+  const visiblePool = expanded
+    ? [...tasks]
+    : tasks.filter((task) => String(task.status ?? "") !== "completed" || isRecentlyCompleted(task, now));
+  const sortedTasks = [...visiblePool].sort((a, b) => compareWidgetTasks(a, b, now));
+  const visibleTasks = expanded ? sortedTasks : sortedTasks.slice(0, maxVisible);
+
   for (const task of visibleTasks) {
     const status = String(task.status ?? "unknown");
-    const recent = isRecentlyCompleted(task);
+    const recent = isRecentlyCompleted(task, now);
     let icon = WIDGET_STATUS_ICONS[status] ?? "•";
     if (recent) icon = "✅";
     const id = String(task.id ?? "?");
@@ -264,8 +318,13 @@ export function formatWidgetLines(tasks: Record<string, unknown>[], health?: Rec
     lines.push(`${icon} ${id} ${title}`);
   }
 
-  if (tasks.length > visibleTasks.length) {
-    lines.push(`… ${tasks.length - visibleTasks.length} more task(s)`);
+  if (!expanded) {
+    const hiddenCompleted = tasks.filter((task) => String(task.status ?? "") === "completed" && !isRecentlyCompleted(task, now)).length;
+    const hiddenOverflow = Math.max(0, visiblePool.length - visibleTasks.length);
+    const hiddenSummary = buildHiddenWidgetSummary(hiddenOverflow, hiddenCompleted);
+    if (hiddenSummary) {
+      lines.push(hiddenSummary);
+    }
   }
 
   return lines;

@@ -7,7 +7,7 @@ Pi package for the Solo task tracker.
 - `solo` tool for task, session, handoff, health, and recovery actions
 - `/solo`, `/solo-pick`, `/solo-done`, and `/solo-errors` commands
 - auto-init when running inside a git repo without an existing Solo database
-- checkbox-style widget showing active, ready, and completed tasks
+- collapsible checkbox-style widget showing active, ready, and completed tasks, with stale completed rows auto-hidden after ~10 minutes (Ctrl+Shift+S toggles details)
 - automatic task context injection before agent work starts
 
 ## Install

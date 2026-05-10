@@ -10,6 +10,7 @@ import {
   formatTaskDetail,
   formatHealth,
   formatWidgetLines,
+  getWidgetRefreshAt,
   resolveSoloExecutionCwd,
   shouldAutoInit,
 } from "./format.js";
@@ -83,12 +84,24 @@ interface SoloState {
   lastError: string | null;
   lastRepoRoot: string | null;
   initialized: boolean;
+  widgetExpanded: boolean;
+  widgetRefreshTimer: ReturnType<typeof setTimeout> | null;
+  widgetContext: ExtensionContext | null;
 }
 
 export default function soloExtension(pi: ExtensionAPI) {
   const agentDir = getAgentDir();
   const errorLogPath = getErrorLogPath(agentDir);
-  const state: SoloState = { lastHealth: null, lastTasks: [], lastError: null, lastRepoRoot: null, initialized: false };
+  const state: SoloState = {
+    lastHealth: null,
+    lastTasks: [],
+    lastError: null,
+    lastRepoRoot: null,
+    initialized: false,
+    widgetExpanded: false,
+    widgetRefreshTimer: null,
+    widgetContext: null,
+  };
 
   // --- Error logging helper ---
   async function logSoloError(
@@ -104,6 +117,66 @@ export default function soloExtension(pi: ExtensionAPI) {
       // Don't let error logging failures cascade
     }
     return record;
+  }
+
+  function clearWidgetRefreshTimer(): void {
+    if (state.widgetRefreshTimer) {
+      clearTimeout(state.widgetRefreshTimer);
+      state.widgetRefreshTimer = null;
+    }
+  }
+
+  function scheduleWidgetRefresh(): void {
+    clearWidgetRefreshTimer();
+    if (!state.widgetContext || state.widgetExpanded) {
+      return;
+    }
+
+    const now = Date.now();
+    const nextRefreshAt = getWidgetRefreshAt(state.lastTasks, now);
+    if (nextRefreshAt === undefined) {
+      return;
+    }
+
+    const delay = Math.max(250, nextRefreshAt - now + 50);
+    const timer = setTimeout(() => {
+      state.widgetRefreshTimer = null;
+      const ctx = state.widgetContext;
+      if (ctx) {
+        renderWidget(ctx);
+      }
+    }, delay);
+    timer.unref?.();
+    state.widgetRefreshTimer = timer;
+  }
+
+  function renderWidget(ctx: ExtensionContext): void {
+    state.widgetContext = ctx;
+    clearWidgetRefreshTimer();
+    if (!ctx.hasUI) {
+      return;
+    }
+
+    if (state.lastError) {
+      const lines = [`Solo: ${state.lastError}`];
+      const location = state.lastRepoRoot ?? undefined;
+      if (location) lines.push(`cwd: ${location}`);
+      ctx.ui.setWidget("solo", lines);
+      return;
+    }
+
+    if (state.lastTasks.length > 0 || state.lastHealth) {
+      ctx.ui.setWidget(
+        "solo",
+        formatWidgetLines(state.lastTasks, state.lastHealth ?? undefined, { expanded: state.widgetExpanded, now: Date.now() }),
+      );
+      scheduleWidgetRefresh();
+      return;
+    }
+
+    const lines = ["Solo: no tasks found"];
+    if (state.lastRepoRoot) lines.push(`repo: ${state.lastRepoRoot}`);
+    ctx.ui.setWidget("solo", lines);
   }
 
   async function ensureSoloInitialized(ctx: ExtensionContext, options: { silent?: boolean } = {}): Promise<boolean> {
@@ -167,40 +240,49 @@ export default function soloExtension(pi: ExtensionAPI) {
       }
 
       if (state.lastError) {
-        const lines = [`Solo: ${state.lastError}`];
-        const location = state.lastRepoRoot ?? taskResult.result.cwd ?? healthResult.result.cwd;
-        if (location) lines.push(`cwd: ${location}`);
-        ctx.ui.setWidget("solo", lines);
+        renderWidget(ctx);
         return;
       }
 
-      if (state.lastTasks.length > 0 || state.lastHealth) {
-        ctx.ui.setWidget("solo", formatWidgetLines(state.lastTasks, state.lastHealth ?? undefined));
-      } else {
-        const lines = ["Solo: no tasks found"];
-        if (state.lastRepoRoot) lines.push(`repo: ${state.lastRepoRoot}`);
-        ctx.ui.setWidget("solo", lines);
-      }
+      renderWidget(ctx);
     } catch (error) {
       state.lastTasks = [];
       state.lastHealth = null;
       state.lastError = error instanceof Error ? error.message : "Unknown Solo widget error";
-      ctx.ui.setWidget("solo", [`Solo: widget refresh failed — ${state.lastError}`]);
+      renderWidget(ctx);
     }
   }
 
   function clearWidget(ctx: ExtensionContext): void {
+    clearWidgetRefreshTimer();
+    state.widgetContext = null;
     ctx.ui.setWidget("solo", undefined);
+  }
+
+  function toggleWidgetDetails(ctx: ExtensionContext): void {
+    state.widgetExpanded = !state.widgetExpanded;
+    renderWidget(ctx);
   }
 
   // --- Lifecycle events ---
   pi.on("session_start", async (_event, ctx) => {
     state.initialized = true;
+    state.widgetExpanded = false;
     await refreshWidget(ctx);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
     clearWidget(ctx);
+  });
+
+  pi.registerShortcut("f8", {
+    description: "Toggle Solo widget details",
+    handler: async (ctx) => toggleWidgetDetails(ctx),
+  });
+
+  pi.registerShortcut("ctrl+shift+s", {
+    description: "Toggle Solo widget details",
+    handler: async (ctx) => toggleWidgetDetails(ctx),
   });
 
   // Auto-inject Solo context so the agent always knows what's available
