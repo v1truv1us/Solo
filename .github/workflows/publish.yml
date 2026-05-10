@@ -19,7 +19,14 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
+
+      - name: Configure npm registry
+        run: npm config set registry https://registry.npmjs.org
+
+      - name: Debug npm auth
+        run: |
+          npm --version
+          npm whoami || echo "not authenticated (expected before publish)"
 
       - name: Install dependencies
         run: npm install
