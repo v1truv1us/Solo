@@ -29,14 +29,6 @@ jobs:
         run: npm run typecheck
         working-directory: ./pi-extension
 
-      - name: Publish to npm (token fallback)
-        if: ${{ secrets.NPM_TOKEN != '' }}
-        run: npm publish --access public
-        working-directory: ./pi-extension
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish to npm (OIDC provenance)
-        if: ${{ secrets.NPM_TOKEN == '' }}
+      - name: Publish to npm with OIDC provenance
         run: npm publish --provenance --access public
         working-directory: ./pi-extension
